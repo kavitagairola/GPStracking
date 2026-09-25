@@ -78,7 +78,7 @@ export default function VehicleDiagnosticPage() {
               <div className="border border-slate-100 p-5 rounded-2xl flex flex-col items-center text-center gap-2">
                 <Zap className="w-8 h-8 text-orange-500" />
                 <span className="text-[16px] font-black text-slate-800 mt-1">
-                  {gpsData.isCharging ? "Charging ⚡" : "Discharging"}
+                  {gpsData.isCharging ? "Charging" : "Discharging"}
                 </span>
                 <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Alternator State</span>
               </div>

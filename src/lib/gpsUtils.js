@@ -38,12 +38,14 @@ export function getDriverForVehicleIndex(idx) {
  *   "HR55AK7159 (A-9)" → 9
  *   "HR63E0663 (A-10)" → 10
  *   "HR63E8418 ( A-11)" → 11  (space before A)
+ *   "HR63F5749 (G-8)" → 8   (Gokul Dham naming)
+ *   "HR63F9657 (G-12)" → 12  (Gokul Dham naming)
  *   "VEHICLE NUMBER 5" → 5
  */
 export function parseAmbulanceNumber(gpsName) {
   if (!gpsName) return null;
   // Try to find (A-N) or (A - N) pattern first
-  const aMatch = gpsName.match(/\(A\s*-\s*(\d+)\)/i);
+  const aMatch = gpsName.match(/\([A-Z]\s*-\s*(\d+)\)/i);
   if (aMatch) return parseInt(aMatch[1], 10);
   // Fallback for "VEHICLE NUMBER N"
   const vMatch = gpsName.match(/VEHICLE\s+NUMBER\s+(\d+)/i);
@@ -57,6 +59,7 @@ export function parseAmbulanceNumber(gpsName) {
 /**
  * Extract the plate number from GPS name (everything before the parenthesis).
  * "HR55AK7159 (A-9)" → "HR55AK7159"
+ * "HR63F5749 (G-8)" → "HR63F5749"
  */
 export function parsePlateNumber(gpsName) {
   if (!gpsName) return "Unknown";
@@ -67,11 +70,11 @@ export function parsePlateNumber(gpsName) {
 }
 
 /**
- * Extract the alias string like "(A-9)" from GPS name.
+ * Extract the alias string like "(A-9)" or "(G-8)" from GPS name.
  */
 export function parseAlias(gpsName) {
   if (!gpsName) return "";
-  const match = gpsName.match(/\(.*?\)/);
+  const match = gpsName.match(/\([A-Z]\s*-\s*\d+\)/i);
   return match ? match[0] : "";
 }
 
@@ -98,11 +101,15 @@ export function formatBatteryPercent(batteryLevel) {
 }
 
 /**
- * Return speed value directly since Millitrack API returns km/h.
+ * Convert speed from knots to km/h (1 knot = 1.852 km/h).
+ * Handles raw speed numbers safely.
  */
 export function knotsToKmh(speed) {
   if (!speed || speed <= 0) return 0;
-  return parseFloat(parseFloat(speed).toFixed(1));
+  // Millitrack / Traccar API returns speed in knots (1 knot = 1.852 km/h)
+  // If speed is already > 100, assume it's already in km/h or m/s
+  const kmh = speed > 100 ? speed : speed * 1.852;
+  return parseFloat(kmh.toFixed(1));
 }
 
 /**
@@ -163,12 +170,23 @@ export function enrichGpsVehicle(gpsItem) {
   if (!gpsItem) return null;
 
   const num = parseAmbulanceNumber(gpsItem.name);
+  // For display: use parsed num if available, else use device id as fallback index
+  const displayNum = num || (gpsItem.id ? (gpsItem.id % 100) : null);
   const plate = parsePlateNumber(gpsItem.name);
   const alias = parseAlias(gpsItem.name);
-  const driver = num ? getDriverForVehicleIndex(num) : { name: "Unassigned", phone: "-" };
+  // Assign driver by parsed number; if no number, use device id-based assignment
+  const driverIdx = num || (gpsItem.id ? (gpsItem.id % DRIVERS_LIST.length) + 1 : null);
+  const driver = driverIdx ? getDriverForVehicleIndex(driverIdx) : { name: "Unassigned", phone: "-" };
+  const isIgnitionOn = gpsItem.attributes?.ignition === true;
 
-  const status = computeVehicleStatus(gpsItem.attributes, gpsItem.speed);
-  const speedKmh = knotsToKmh(gpsItem.speed);
+  // Extract raw speed (top-level or from attributes)
+  let rawSpeed = gpsItem.speed !== undefined && gpsItem.speed !== null 
+    ? gpsItem.speed 
+    : (gpsItem.attributes?.speed || 0);
+
+
+  const speedKmh = knotsToKmh(rawSpeed);
+  const status = computeVehicleStatus(gpsItem.attributes, speedKmh);
   const batteryPct = formatBatteryPercent(gpsItem.attributes?.batteryLevel);
   const totalDistKm = metersToKm(gpsItem.attributes?.totalDistance);
   const todayDistKm = metersToKm(gpsItem.attributes?.todayDistance);
@@ -185,14 +203,14 @@ export function enrichGpsVehicle(gpsItem) {
     // Raw GPS fields preserved
     ...gpsItem,
     // Enriched fields
-    num,
+    num: displayNum,
     plate,
     alias,
     driverName: driver.name,
     driverPhone: driver.phone,
     status,
     speedKmh,
-    speedDisplay: speedKmh.toFixed(1) + " km/h",
+    speedDisplay: speedKmh > 0 ? `${speedKmh.toFixed(1)} km/h` : "0.0 km/h",
     batteryPct,
     batteryDisplay: batteryPct !== null ? batteryPct + "%" : "N/A",
     totalDistKm,
@@ -202,7 +220,7 @@ export function enrichGpsVehicle(gpsItem) {
     address,
     lastUpdate,
     formattedTime,
-    isIgnitionOn: gpsItem.attributes?.ignition === true,
+    isIgnitionOn,
     isCharging: gpsItem.attributes?.charge === true,
     course: gpsItem.course || 0,
   };

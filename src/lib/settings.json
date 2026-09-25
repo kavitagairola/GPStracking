@@ -1,0 +1,11 @@
+{
+  "orgName": "Gokul Dham Gau Sewa Mahatirth",
+  "supportPhone": "9876543200",
+  "supportEmail": "ops@resqtrack.org",
+  "pollingRate": 4,
+  "offlineTimeout": 15,
+  "autoDispatch": "NEAREST",
+  "smsHighAlert": true,
+  "emailDailyDigest": false,
+  "enforcePhoto": true
+}

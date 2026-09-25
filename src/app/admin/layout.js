@@ -6,19 +6,25 @@ import Navbar from "@/components/Navbar";
 
 export default function AdminLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
-    <div className="flex h-screen w-full bg-[#f8fafc] text-gray-900 overflow-hidden">
+    <div className="flex min-h-[100dvh] h-[100dvh] w-full bg-[#f8fafc] text-gray-900 overflow-hidden">
       {/* Mobile Sidebar Backdrop */}
       {sidebarOpen && (
         <div 
           onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 bg-black/40 z-40 lg:hidden backdrop-blur-[1px]"
+          className="fixed inset-0 bg-black/60 z-[9998] lg:hidden backdrop-blur-sm transition-opacity"
         />
       )}
 
       {/* Sidebar navigation */}
-      <Sidebar sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
+      <Sidebar 
+        sidebarOpen={sidebarOpen} 
+        setSidebarOpen={setSidebarOpen} 
+        collapsed={sidebarCollapsed}
+        setCollapsed={setSidebarCollapsed}
+      />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">

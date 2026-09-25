@@ -1,68 +1,85 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Search, Plus, Calendar, MapPin, Truck, AlertOctagon, Heart, HelpCircle, X, CheckSquare, Clock } from "lucide-react";
+import { 
+  Search, Plus, MapPin, Truck, AlertOctagon, HelpCircle, X, CheckSquare, 
+  Clock, Phone, Trash2, Calendar, Eye, RefreshCw, Sliders, ChevronLeft, ChevronRight
+} from "lucide-react";
 import { enrichGpsVehicle } from "@/lib/gpsUtils";
-
-const initialCases = [
-  { id: "CASE-260602-001", caller: "Ramesh Sharma", animal: "Cow", condition: "Fractured hind leg", priority: "HIGH", location: "Sector 45, Noida", driver: "Raj Kumar", status: "Assigned", time: "10:30 AM" },
-  { id: "CASE-260602-002", caller: "Sita Devi", animal: "Buffalo", condition: "Deep neck laceration", priority: "HIGH", location: "Chipyana, Noida", driver: "Karan Singh", status: "En Route", time: "10:15 AM" },
-  { id: "CASE-260602-003", caller: "Amit Verma", animal: "Cow", condition: "Dehydration & weakness", priority: "LOW", location: "Village Dadri", driver: "Pawan Singh", status: "Reached Location", time: "09:45 AM" },
-  { id: "CASE-260602-004", caller: "Vikash Chaudhary", animal: "Dog", condition: "Skin disease / Mange", priority: "MEDIUM", location: "Knowledge Park, Noida", driver: "Amit Verma", status: "Animal Picked", time: "09:20 AM" },
-  { id: "CASE-260602-005", caller: "Neha Gupta", animal: "Cow", condition: "Broken wing", priority: "LOW", location: "Greater Noida", driver: "Jatin Sharma", status: "Hospital Reached", time: "09:10 AM" }
-];
 
 export default function CasesPage() {
   const [cases, setCases] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [priorityFilter, setPriorityFilter] = useState("ALL");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [gpsData, setGpsData] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  // Fetch real-time GPS telemetry and persistent cases
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch GPS
-        const gpsRes = await fetch("/api/gps?t=" + Date.now());
-        const gpsJson = await gpsRes.json();
-        if (gpsJson.success && gpsJson.data?.object) {
-          setGpsData(gpsJson.data.object);
-        }
+  // Selection states
+  const [selectedCaseIds, setSelectedCaseIds] = useState([]);
 
-        // Fetch Cases
-        const casesRes = await fetch("/api/cases?t=" + Date.now());
-        const casesJson = await casesRes.json();
-        if (casesJson.success && casesJson.data) {
-          setCases(casesJson.data);
-        }
-      } catch (err) {
-        console.error("Data Fetch Error on Cases Page:", err);
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 8;
+
+  // Form states
+  const [newCaller, setNewCaller] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [newAnimal, setNewAnimal] = useState("Cow");
+  const [newCondition, setNewCondition] = useState("");
+  const [newLocation, setNewLocation] = useState("");
+  const [newPriority, setNewPriority] = useState("MEDIUM");
+  const [drivers, setDrivers] = useState([]);
+  const [newDriver, setNewDriver] = useState("");
+
+  const fetchData = async () => {
+    try {
+      const [gpsRes, casesRes, driversRes] = await Promise.all([
+        fetch("/api/gps?t=" + Date.now()),
+        fetch("/api/cases?t=" + Date.now()),
+        fetch("/api/drivers"),
+      ]);
+      const gpsJson     = await gpsRes.json();
+      const casesJson   = await casesRes.json();
+      const driversJson = await driversRes.json();
+
+      if (gpsJson.success && gpsJson.data?.object) {
+        setGpsData(gpsJson.data.object);
       }
-    };
+      if (casesJson.success && casesJson.data) {
+        setCases(casesJson.data);
+      }
+      if (driversJson.success && driversJson.data) {
+        const fetchedDrivers = driversJson.data;
+        setDrivers(fetchedDrivers);
+
+        // Smart auto-select first On-Duty driver
+        const firstOnDuty = fetchedDrivers.find(d => d.availability !== "Off Duty" && d.availability !== "On Leave");
+        if (firstOnDuty) {
+          setNewDriver(prev => prev || firstOnDuty.name);
+        } else if (fetchedDrivers.length > 0) {
+          setNewDriver(prev => prev || fetchedDrivers[0].name);
+        }
+      }
+    } catch (err) {
+      console.error("Data Fetch Error on Admin Cases Page:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 4000);
     return () => clearInterval(interval);
   }, []);
 
-  // Form states
-  const [newCaller, setNewCaller] = useState("");
-  const [newAnimal, setNewAnimal] = useState("Cow");
-  const [newCondition, setNewCondition] = useState("");
-  const [newLocation, setNewLocation] = useState("");
-  const [newPriority, setNewPriority] = useState("MEDIUM");
-  const [newDriver, setNewDriver] = useState("Raj Kumar");
-
-  // Build the live lookup map for driver -> vehicle data using shared utils
   const driverLiveMap = {};
   gpsData.forEach((v) => {
     const enriched = enrichGpsVehicle(v);
     if (enriched) {
-      driverLiveMap[enriched.driverName] = {
-        ...enriched,
-        location: enriched.address,
-        speedKmh: enriched.speedDisplay,
-      };
+      driverLiveMap[enriched.driverName] = enriched;
     }
   });
 
@@ -70,8 +87,8 @@ export default function CasesPage() {
     switch (priority) {
       case "HIGH": return "bg-rose-50 text-rose-600 border border-rose-100";
       case "MEDIUM": return "bg-amber-50 text-amber-600 border border-amber-100";
-      case "LOW": return "bg-gray-50 text-gray-500 border border-gray-150";
-      default: return "bg-gray-50 text-gray-500";
+      case "LOW": return "bg-slate-50 text-slate-500 border border-slate-150";
+      default: return "bg-slate-50 text-slate-500";
     }
   };
 
@@ -79,10 +96,10 @@ export default function CasesPage() {
     switch (status) {
       case "Assigned": return "bg-blue-50 text-blue-600 border border-blue-100";
       case "En Route": return "bg-orange-50 text-orange-600 border border-orange-100";
-      case "Reached Location": return "bg-emerald-50 text-emerald-600 border border-emerald-100";
-      case "Animal Picked": return "bg-amber-50 text-amber-700 border border-amber-150";
-      case "Hospital Reached": return "bg-purple-50 text-purple-600 border border-purple-100";
-      default: return "bg-gray-50 text-gray-500";
+      case "Reached Location": return "bg-teal-50 text-teal-600 border border-teal-100";
+      case "Animal Picked": return "bg-violet-50 text-violet-600 border border-violet-100";
+      case "Hospital Reached": return "bg-emerald-50 text-emerald-600 border border-emerald-100";
+      default: return "bg-slate-50 text-slate-500";
     }
   };
 
@@ -94,6 +111,7 @@ export default function CasesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           caller: newCaller,
+          phone: newPhone || "N/A",
           animal: newAnimal,
           condition: newCondition,
           location: newLocation,
@@ -106,6 +124,7 @@ export default function CasesPage() {
         setCases(prev => [json.data, ...prev]);
         setIsModalOpen(false);
         setNewCaller("");
+        setNewPhone("");
         setNewCondition("");
         setNewLocation("");
       }
@@ -114,247 +133,441 @@ export default function CasesPage() {
     }
   };
 
+  const handleDeleteCase = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this case permanently?")) return;
+    try {
+      const res = await fetch(`/api/cases?id=${id}`, {
+        method: "DELETE"
+      });
+      const json = await res.json();
+      if (json.success) {
+        setCases(prev => prev.filter(c => c.id !== id));
+        setSelectedCaseIds(prev => prev.filter(item => item !== id));
+      }
+    } catch (err) {
+      console.error("Failed to delete case:", err);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (!window.confirm(`Are you sure you want to delete the ${selectedCaseIds.length} selected cases?`)) return;
+    try {
+      for (const id of selectedCaseIds) {
+        await fetch(`/api/cases?id=${id}`, { method: "DELETE" });
+      }
+      setCases(prev => prev.filter(c => !selectedCaseIds.includes(c.id)));
+      setSelectedCaseIds([]);
+    } catch (err) {
+      console.error("Failed batch delete cases:", err);
+    }
+  };
+
+  const handleResetFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("ALL");
+    setPriorityFilter("ALL");
+    setCurrentPage(1);
+    setSelectedCaseIds([]);
+  };
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      setSelectedCaseIds(paginatedCases.map(c => c.id));
+    } else {
+      setSelectedCaseIds([]);
+    }
+  };
+
+  const handleSelectOne = (id) => {
+    setSelectedCaseIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const getAnimalEmoji = (animal) => {
+    return "";
+  };
+
   const filteredCases = cases.filter(c => {
     const matchesSearch = c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           c.caller.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           c.animal.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          c.location.toLowerCase().includes(searchQuery.toLowerCase());
+                          c.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          c.driver.toLowerCase().includes(searchQuery.toLowerCase());
+    
     const matchesStatus = statusFilter === "ALL" || c.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesPriority = priorityFilter === "ALL" || c.priority === priorityFilter;
+    
+    return matchesSearch && matchesStatus && matchesPriority;
   });
 
-  const getAnimalEmoji = (animal) => {
-    switch (animal) {
-      case "Cow": return "🐄";
-      case "Buffalo": return "🐃";
-      case "Dog": return "🐕";
-      case "Cat": return "🐈";
-      default: return "🐾";
-    }
-  };
+  // Pagination
+  const totalItems = filteredCases.length;
+  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
+  const paginatedCases = filteredCases.slice(startIndex, startIndex + itemsPerPage);
 
   return (
-    <div className="flex flex-col gap-6 w-full text-[#1e293b] relative">
+    <div className="flex flex-col gap-6 w-full text-slate-800 relative">
       
-      {/* 4 Mini Cards on top */}
+      {/* Title Header */}
+      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div className="flex flex-col">
+          <h1 className="text-[20px] font-black text-slate-900 tracking-tight">Rescue Cases Registry</h1>
+          <p className="text-[12px] text-gray-400 mt-1 font-bold">Comprehensive central registry to track, log, and coordinate animal rescue operations.</p>
+        </div>
+        <button 
+          onClick={() => setIsModalOpen(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4.5 py-2.5 rounded-xl text-[12px] font-black flex items-center gap-2 shadow-sm transition active:scale-[0.98] cursor-pointer"
+        >
+          <Plus className="w-4 h-4" />
+          <span>Log New Case</span>
+        </button>
+      </div>
+
+      {/* 4 Premium Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-2xs flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-3xs flex items-center justify-between">
           <div className="flex flex-col">
-            <span className="text-[12px] font-bold text-gray-400 uppercase tracking-wide">Total Active Cases</span>
-            <span className="text-[24px] font-black text-slate-900 mt-1">{cases.length}</span>
+            <span className="text-[11.5px] font-black text-gray-400 uppercase tracking-wide">Active Cases</span>
+            <span className="text-[26px] font-black text-slate-900 mt-1 leading-none">{cases.length}</span>
           </div>
-          <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center">
-            <HelpCircle className="w-5 h-5" />
+          <div className="w-11 h-11 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
+            <HelpCircle className="w-5.5 h-5.5" />
           </div>
         </div>
 
-        <div className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-2xs flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-3xs flex items-center justify-between">
           <div className="flex flex-col">
-            <span className="text-[12px] font-bold text-gray-400 uppercase tracking-wide">Critical Alerts</span>
-            <span className="text-[24px] font-black text-rose-600 mt-1">
+            <span className="text-[11.5px] font-black text-gray-400 uppercase tracking-wide">Critical Alerts</span>
+            <span className="text-[26px] font-black text-rose-600 mt-1 leading-none">
               {cases.filter(c => c.priority === "HIGH").length}
             </span>
           </div>
-          <div className="w-10 h-10 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center">
-            <AlertOctagon className="w-5 h-5" />
+          <div className="w-11 h-11 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center">
+            <AlertOctagon className="w-5.5 h-5.5" />
           </div>
         </div>
 
-        <div className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-2xs flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-3xs flex items-center justify-between">
           <div className="flex flex-col">
-            <span className="text-[12px] font-bold text-gray-400 uppercase tracking-wide">En Route / Picking</span>
-            <span className="text-[24px] font-black text-orange-500 mt-1">
-              {cases.filter(c => c.status === "En Route" || c.status === "Animal Picked").length}
+            <span className="text-[11.5px] font-black text-gray-400 uppercase tracking-wide">En Route</span>
+            <span className="text-[26px] font-black text-orange-500 mt-1 leading-none">
+              {cases.filter(c => c.status === "En Route").length}
             </span>
           </div>
-          <div className="w-10 h-10 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center">
-            <Clock className="w-5 h-5" />
+          <div className="w-11 h-11 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center">
+            <Clock className="w-5.5 h-5.5 animate-pulse" />
           </div>
         </div>
 
-        <div className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-2xs flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-3xs flex items-center justify-between">
           <div className="flex flex-col">
-            <span className="text-[12px] font-bold text-gray-400 uppercase tracking-wide">Hospitals Reached</span>
-            <span className="text-[24px] font-black text-purple-600 mt-1">
+            <span className="text-[11.5px] font-black text-gray-400 uppercase tracking-wide">Hospital Reached</span>
+            <span className="text-[26px] font-black text-emerald-600 mt-1 leading-none">
               {cases.filter(c => c.status === "Hospital Reached").length}
             </span>
           </div>
-          <div className="w-10 h-10 bg-purple-50 text-purple-500 rounded-xl flex items-center justify-center">
-            <CheckSquare className="w-5 h-5" />
+          <div className="w-11 h-11 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center">
+            <CheckSquare className="w-5.5 h-5.5" />
           </div>
         </div>
       </div>
 
-      {/* Main Filter & Table area */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-2xs flex flex-col w-full">
-        
-        {/* Table header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 mb-6">
-          <div className="flex flex-col">
-            <h3 className="text-[15px] font-bold text-gray-900">Cases Registry</h3>
-            <span className="text-[11px] text-gray-400 mt-[2px]">Log and assign incoming calls to rescue units.</span>
+      {/* Filter and Control Panel */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-3xs flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3 flex-wrap flex-1 min-w-[280px]">
+          
+          {/* Search Box */}
+          <div className="relative flex-1 max-w-sm">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search by ID, caller, animal, or driver..."
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+              className="h-10 pl-10 pr-4 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] placeholder-gray-400 focus:outline-none focus:bg-white focus:border-slate-300 transition-all w-full"
+            />
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative max-w-xs">
-              <Search className="w-3.5 h-3.5 absolute left-3 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search cases..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-10 pl-9 pr-4 bg-gray-50 border border-slate-200 rounded-xl text-[12px] placeholder-gray-405 focus:outline-none focus:bg-white focus:border-gray-300 transition-all w-60"
-              />
-            </div>
+          {/* Status Dropdown */}
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
+            className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12px] font-black text-slate-650 cursor-pointer min-w-[130px] outline-none focus:border-slate-300"
+          >
+            <option value="ALL">All Statuses</option>
+            <option value="Assigned">Assigned</option>
+            <option value="En Route">En Route</option>
+            <option value="Reached Location">Reached Spot</option>
+            <option value="Animal Picked">Animal Picked</option>
+            <option value="Hospital Reached">Hospital Reached</option>
+          </select>
 
-            {/* Status filtering pills */}
-            <div className="flex items-center gap-1 bg-gray-50 p-1 border border-slate-200 rounded-xl">
-              {["ALL", "Assigned", "En Route", "Hospital Reached"].map((status) => (
-                <button
-                  key={status}
-                  onClick={() => setStatusFilter(status)}
-                  className={`px-3.5 py-1.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
-                    statusFilter === status
-                      ? "bg-white text-slate-900 shadow-xs border border-slate-200/50"
-                      : "text-gray-400 hover:text-gray-700"
-                  }`}
-                >
-                  {status === "ALL" ? "ALL" : status}
-                </button>
-              ))}
-            </div>
-
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="h-10 px-4 bg-blue-600 hover:bg-blue-700 text-white text-[12.5px] font-bold rounded-xl flex items-center gap-2 transition active:scale-[0.98] cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Create Call</span>
-            </button>
-          </div>
+          {/* Priority Dropdown */}
+          <select
+            value={priorityFilter}
+            onChange={(e) => { setPriorityFilter(e.target.value); setCurrentPage(1); }}
+            className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12px] font-black text-slate-650 cursor-pointer min-w-[130px] outline-none focus:border-slate-300"
+          >
+            <option value="ALL">All Priorities</option>
+            <option value="HIGH">High Priority</option>
+            <option value="MEDIUM">Medium Priority</option>
+            <option value="LOW">Low Priority</option>
+          </select>
         </div>
 
-        {/* Custom styled table */}
+        {/* Action Group */}
+        <div className="flex items-center gap-2">
+          {selectedCaseIds.length > 0 && (
+            <button
+              onClick={handleBatchDelete}
+              className="h-10 px-4 rounded-xl bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-600 text-[12px] font-black transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Delete Selected ({selectedCaseIds.length})</span>
+            </button>
+          )}
+
+          <button
+            onClick={handleResetFilters}
+            className="h-10 px-4 rounded-xl border border-slate-200 bg-white text-[12.5px] font-black text-slate-600 hover:bg-slate-50 transition flex items-center gap-1.5 shadow-3xs cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
+            <span>Reset</span>
+          </button>
+        </div>
+      </div>
+
+      {/* High-density, professional registry table */}
+      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-3xs overflow-hidden">
         <div className="overflow-x-auto w-full">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-150 text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                <th className="pb-3 px-3">Case ID</th>
-                <th className="pb-3 px-3">Caller Name</th>
-                <th className="pb-3 px-3">Animal Details</th>
-                <th className="pb-3 px-3">Severity</th>
-                <th className="pb-3 px-3">Accident Spot</th>
-                <th className="pb-3 px-3">Assigned Driver</th>
-                <th className="pb-3 px-3">Milestone Status</th>
-                <th className="pb-3 px-3">Logged Time</th>
-                <th className="pb-3 px-3 text-right">Action</th>
+              <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-gray-400 bg-slate-50/50">
+                <th className="py-3.5 px-4 w-[40px]">
+                  <input 
+                    type="checkbox"
+                    onChange={handleSelectAll}
+                    checked={paginatedCases.length > 0 && paginatedCases.every(c => selectedCaseIds.includes(c.id))}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </th>
+                <th className="py-3.5 px-4">Case ID</th>
+                <th className="py-3.5 px-4">Caller details</th>
+                <th className="py-3.5 px-4">Animal info</th>
+                <th className="py-3.5 px-4">Severity</th>
+                <th className="py-3.5 px-4">Accident Location</th>
+                <th className="py-3.5 px-4">Assigned Unit</th>
+                <th className="py-3.5 px-4">Milestone</th>
+                <th className="py-3.5 px-4">Logged Time</th>
+                <th className="py-3.5 px-4 text-center">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-[12.5px] text-slate-700">
-              {filteredCases.map((item) => {
-                const liveInfo = driverLiveMap[item.driver];
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="py-4 px-3 font-semibold text-slate-900">{item.id}</td>
-                    <td className="py-4 px-3 text-slate-600 font-medium">{item.caller}</td>
-                    <td className="py-4 px-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 text-[14px]">
-                          {getAnimalEmoji(item.animal)}
-                        </div>
+            <tbody className="divide-y divide-slate-50 text-[12.5px] text-slate-700 font-medium">
+              {loading && paginatedCases.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-20 text-center text-[12px] font-bold text-gray-400">
+                    Connecting to central registry data...
+                  </td>
+                </tr>
+              ) : paginatedCases.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-20 text-center text-[12.5px] font-bold text-slate-400">
+                    No rescue records found matching current query filters.
+                  </td>
+                </tr>
+              ) : (
+                paginatedCases.map((item) => {
+                  const liveInfo = driverLiveMap[item.driver];
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50/30 transition-colors">
+                      {/* Checkbox */}
+                      <td className="py-3 px-4">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedCaseIds.includes(item.id)}
+                          onChange={() => handleSelectOne(item.id)}
+                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+
+                      {/* Case ID */}
+                      <td className="py-3 px-4 font-black text-slate-800 leading-tight">
+                        {item.id}
+                      </td>
+
+                      {/* Caller */}
+                      <td className="py-3 px-4">
                         <div className="flex flex-col">
-                          <span className="font-bold text-slate-800">{item.animal}</span>
-                          <span className="text-[10px] text-gray-400 font-normal mt-[1px]">{item.condition}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-4 px-3">
-                      <span className={`inline-block px-2.5 py-[3px] rounded-md text-[10px] font-bold ${getPriorityStyle(item.priority)}`}>
-                        {item.priority}
-                      </span>
-                    </td>
-                    <td className="py-4 px-3 text-gray-500 font-normal">
-                      <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                          <span>{item.location}</span>
-                        </div>
-                        {liveInfo && (
-                          <div className="text-[10px] text-slate-400 font-semibold flex items-center gap-1">
-                            <span className="text-[8.5px] text-indigo-500 font-bold uppercase">GPS:</span>
-                            <span className="truncate max-w-[150px]">{liveInfo.location}</span>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-3">
-                      <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-blue-50 border border-blue-100 text-blue-500 flex items-center justify-center text-[10px] font-bold">
-                            {item.driver.split(" ").map(n => n[0]).join("")}
-                          </div>
-                          <span className="font-semibold text-slate-850">{item.driver}</span>
-                        </div>
-                        {liveInfo && (
-                          <div className={`text-[9px] font-extrabold flex items-center gap-1 pl-8 ${
-                            liveInfo.status === "RUNNING" ? "text-emerald-600" : liveInfo.status === "IDLE" ? "text-amber-600" : "text-rose-500"
-                          }`}>
-                            <span className={`w-1 h-1 rounded-full ${
-                              liveInfo.status === "RUNNING" ? "bg-emerald-500 animate-pulse" : liveInfo.status === "IDLE" ? "bg-amber-500 animate-pulse" : "bg-rose-500"
-                            }`}></span>
-                            <span>{liveInfo.plate} ({liveInfo.status})</span>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-3">
-                      <div className="flex flex-col gap-1">
-                        <span className={`inline-block px-2.5 py-[3px] rounded-md text-[10px] font-bold tracking-wide ${getStatusStyle(item.status)}`}>
-                          {item.status}
-                        </span>
-                        {liveInfo && (
-                          <span className={`text-[9px] font-extrabold flex items-center gap-1 ${
-                            liveInfo.status === "RUNNING" ? "text-emerald-600" : liveInfo.status === "IDLE" ? "text-amber-600" : "text-rose-500"
-                          }`}>
-                            <span className={`w-1 h-1 rounded-full ${
-                              liveInfo.status === "RUNNING" ? "bg-emerald-500 animate-pulse" : liveInfo.status === "IDLE" ? "bg-amber-500 animate-pulse" : "bg-rose-500"
-                            }`}></span>
-                            <span>GPS: {liveInfo.speedKmh}</span>
+                          <span className="font-extrabold text-slate-700 leading-tight">{item.caller}</span>
+                          <span className="text-[9.5px] text-slate-400 mt-1 font-bold flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-slate-300" /> {item.phone || "N/A"}
                           </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-3 text-gray-400 text-[11px] font-medium">
-                      {item.time}
-                    </td>
-                    <td className="py-4 px-3 text-right">
-                      {liveInfo ? (
-                        <a
-                          href={`/admin/live-tracking?selected=${encodeURIComponent(liveInfo.plate)}`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-white text-[10.5px] font-bold rounded-lg transition active:scale-[0.97]"
-                        >
-                          <Truck className="w-3.5 h-3.5" />
-                          <span>Track Live</span>
-                        </a>
-                      ) : (
-                        <span className="text-[10px] text-gray-400 font-bold">Offline</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                        </div>
+                      </td>
+
+                      {/* Animal Species & condition */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 text-[14px] shadow-3xs">
+                            {getAnimalEmoji(item.animal)}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="font-extrabold text-slate-800 leading-none">{item.animal}</span>
+                            <span className="text-[10px] text-slate-450 mt-1 font-bold truncate max-w-[140px]" title={item.condition}>
+                              {item.condition}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Severity Priority */}
+                      <td className="py-3 px-4">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${getPriorityStyle(item.priority)}`}>
+                          {item.priority}
+                        </span>
+                      </td>
+
+                      {/* Accident Location Spot */}
+                      <td className="py-3 px-4 min-w-[180px] max-w-[220px]">
+                        <div className="flex items-start gap-1.5 w-full min-w-0" title={item.location}>
+                          <MapPin className="w-3.5 h-3.5 text-rose-500 flex-shrink-0 mt-0.5" />
+                          <div className="flex flex-col min-w-0 flex-1">
+                            <span className="font-extrabold text-slate-800 text-[12px] truncate block">{item.location}</span>
+                            {liveInfo && (
+                              <span className="text-[9.5px] text-slate-400 font-semibold truncate block mt-0.5" title={liveInfo.address}>
+                                Live: {liveInfo.address}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Assigned Driver & vehicle plate */}
+                      <td className="py-3 px-4 min-w-[160px]">
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[9.5px] font-black flex-shrink-0 border border-slate-200">
+                              {item.driver.split(" ").map(n => n[0]).join("")}
+                            </div>
+                            <span className="font-extrabold text-slate-800 text-[12px] truncate">{item.driver}</span>
+                          </div>
+                          {liveInfo && (
+                            <div className="mt-1 font-bold text-[9.5px] text-slate-500 flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.25 rounded bg-slate-100 border border-slate-200/80 font-black text-slate-700 text-[9px] whitespace-nowrap">
+                                A{String(liveInfo.num).padStart(2, '0')}
+                              </span>
+                              <span className="font-bold text-slate-600 truncate">{liveInfo.plate}</span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Milestone Status */}
+                      <td className="py-3 px-4 min-w-[130px]">
+                        <div className="flex flex-col items-start gap-1">
+                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[9.5px] font-black uppercase border leading-normal whitespace-nowrap ${getStatusStyle(item.status)}`}>
+                            {item.status}
+                          </span>
+                          {liveInfo && (
+                            <span className={`text-[9.5px] font-black flex items-center gap-1 whitespace-nowrap ${
+                              liveInfo.status === "RUNNING" ? "text-emerald-600" : "text-amber-600"
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${
+                                liveInfo.status === "RUNNING" ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
+                              }`} />
+                              {liveInfo.speedDisplay}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Logged Time */}
+                      <td className="py-3 px-4 text-slate-400 text-[11px] font-extrabold">
+                        {item.time}
+                      </td>
+
+                      {/* Action buttons */}
+                      <td className="py-3 px-4 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {liveInfo ? (
+                            <a
+                              href={`/admin/live-tracking?selected=${encodeURIComponent(liveInfo.plate)}`}
+                              className="h-8 px-2.5 bg-slate-900 hover:bg-slate-800 text-white text-[10.5px] font-black rounded-lg transition active:scale-[0.97] flex items-center gap-1 shadow-3xs"
+                            >
+                              <Truck className="w-3 h-3" />
+                              <span>Track</span>
+                            </a>
+                          ) : (
+                            <span className="text-[10px] text-gray-400 font-bold">Offline</span>
+                          )}
+                          <button
+                            onClick={() => handleDeleteCase(item.id)}
+                            className="h-8 w-8 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 flex items-center justify-center transition active:scale-[0.97] cursor-pointer"
+                            title="Delete case permanently"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
 
+        {/* Table Pagination Footer */}
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-3 bg-white">
+          <span className="text-[11.5px] font-bold text-gray-400">
+            Showing {totalItems === 0 ? 0 : startIndex + 1} to {endIndex} of {totalItems} entries
+          </span>
+
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                className="w-7.5 h-7.5 rounded-lg border border-slate-200 flex items-center justify-center text-gray-550 hover:bg-slate-50 transition cursor-pointer disabled:opacity-40 disabled:hover:bg-white"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className={`w-7.5 h-7.5 rounded-lg text-[11.5px] font-extrabold transition cursor-pointer ${
+                    currentPage === page
+                      ? "bg-blue-600 text-white shadow-3xs"
+                      : "border border-slate-200 text-gray-650 hover:bg-slate-50"
+                  }`}
+                >
+                  {page}
+                </button>
+              ))}
+
+              <button
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                className="w-7.5 h-7.5 rounded-lg border border-slate-200 flex items-center justify-center text-gray-550 hover:bg-slate-50 transition cursor-pointer disabled:opacity-40 disabled:hover:bg-white"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Create Case Modal popup overlay */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[1px] p-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg border border-slate-200 p-6 flex flex-col gap-4 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4">
+          <div className="bg-white rounded-3xl w-full max-w-lg border border-slate-100 p-6 flex flex-col gap-5 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-[14.5px] font-bold text-gray-900">Create New Rescue Case</h3>
+              <h3 className="text-[14.5px] font-black text-slate-800">Create New Rescue Case</h3>
               <button 
                 onClick={() => setIsModalOpen(false)}
                 className="text-gray-400 hover:text-gray-700 bg-transparent border-none cursor-pointer"
@@ -372,21 +585,48 @@ export default function CasesPage() {
                     required
                     value={newCaller}
                     onChange={(e) => setNewCaller(e.target.value)}
-                    placeholder="e.g. Amit Verma"
-                    className="h-10 px-3.5 bg-gray-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
+                    placeholder="e.g. Ramesh Sharma"
+                    className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
                   />
                 </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-bold text-gray-500 uppercase text-[10px] tracking-wide">Contact Number</label>
+                  <input
+                    type="text"
+                    required
+                    value={newPhone}
+                    onChange={(e) => setNewPhone(e.target.value)}
+                    placeholder="e.g. 9876543210"
+                    className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
                   <label className="font-bold text-gray-500 uppercase text-[10px] tracking-wide">Animal Classification</label>
                   <select
                     value={newAnimal}
                     onChange={(e) => setNewAnimal(e.target.value)}
-                    className="h-10 px-3.5 bg-gray-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
+                    className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all cursor-pointer font-bold text-slate-700"
                   >
                     <option value="Cow">Cow</option>
                     <option value="Buffalo">Buffalo</option>
                     <option value="Dog">Dog</option>
                     <option value="Cat">Cat</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-bold text-gray-500 uppercase text-[10px] tracking-wide">Call Severity Priority</label>
+                  <select
+                    value={newPriority}
+                    onChange={(e) => setNewPriority(e.target.value)}
+                    className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all cursor-pointer font-bold text-slate-700"
+                  >
+                    <option value="HIGH">High Priority</option>
+                    <option value="MEDIUM">Medium Priority</option>
+                    <option value="LOW">Low Priority</option>
                   </select>
                 </div>
               </div>
@@ -399,7 +639,7 @@ export default function CasesPage() {
                   value={newCondition}
                   onChange={(e) => setNewCondition(e.target.value)}
                   placeholder="e.g. Bleeding neck laceration, leg injury"
-                  className="h-10 px-3.5 bg-gray-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
+                  className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
                 />
               </div>
 
@@ -411,46 +651,42 @@ export default function CasesPage() {
                   value={newLocation}
                   onChange={(e) => setNewLocation(e.target.value)}
                   placeholder="e.g. Knowledge Park Sector 12, Noida"
-                  className="h-10 px-3.5 bg-gray-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
+                  className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-bold text-gray-500 uppercase text-[10px] tracking-wide">Call Severity Priority</label>
-                  <select
-                    value={newPriority}
-                    onChange={(e) => setNewPriority(e.target.value)}
-                    className="h-10 px-3.5 bg-gray-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
-                  >
-                    <option value="HIGH">High Priority</option>
-                    <option value="MEDIUM">Medium Priority</option>
-                    <option value="LOW">Low Priority</option>
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="font-bold text-gray-500 uppercase text-[10px] tracking-wide">Ambulance Driver Allocation</label>
-                  <select
-                    value={newDriver}
-                    onChange={(e) => setNewDriver(e.target.value)}
-                    className="h-10 px-3.5 bg-gray-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all"
-                  >
-                    <option value="Raj Kumar">Raj Kumar (A-1)</option>
-                    <option value="Pawan Singh">Pawan Singh (A-3)</option>
-                    <option value="Amit Verma">Amit Verma (A-4)</option>
-                    <option value="Mohit Sharma">Mohit Sharma (A-7)</option>
-                    <option value="Karan Singh">Karan Singh (A-9)</option>
-                    <option value="Jatin Sharma">Jatin Sharma (A-12)</option>
-                    <option value="Manoj Yadav">Manoj Yadav</option>
-                    <option value="Suresh Pal">Suresh Pal</option>
-                  </select>
-                </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="font-bold text-gray-500 uppercase text-[10px] tracking-wide">Ambulance Driver Allocation</label>
+                <select
+                  value={newDriver}
+                  onChange={(e) => setNewDriver(e.target.value)}
+                  className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-blue-500 transition-all cursor-pointer font-bold text-slate-700"
+                >
+                  {(() => {
+                    const sorted = [...drivers].sort((a, b) => {
+                      const aOff = a.availability === "Off Duty" || a.availability === "On Leave";
+                      const bOff = b.availability === "Off Duty" || b.availability === "On Leave";
+                      if (aOff && !bOff) return 1;
+                      if (!aOff && bOff) return -1;
+                      return 0;
+                    });
+                    return sorted.map(d => {
+                      const activeCount = cases.filter(c => c.driver === d.name && c.status !== "Completed").length;
+                      const isOffDuty = d.availability === "Off Duty" || d.availability === "On Leave";
+                      let tag = isOffDuty ? "[Off Duty]" : (activeCount === 0 ? "[On Duty & Available]" : `[Busy - ${activeCount} Active Case]`);
+                      return (
+                        <option key={d.id} value={d.name}>
+                          {d.name} ({d.vehicle_name || d.ambulance || "Ambulance"}) — {tag}
+                        </option>
+                      );
+                    });
+                  })()}
+                </select>
               </div>
 
               <button
                 type="submit"
-                className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl mt-3 transition active:scale-[0.98] cursor-pointer flex items-center justify-center"
+                className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-xl mt-3 transition active:scale-[0.98] cursor-pointer flex items-center justify-center"
               >
                 <span>Dispatch Crew & Log Case</span>
               </button>

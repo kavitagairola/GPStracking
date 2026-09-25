@@ -39,106 +39,84 @@ import {
   parseAlias,
   getDriverForVehicleIndex
 } from "@/lib/gpsUtils";
+import { connectGpsStream, createAnimatedMarker } from "@/lib/markerAnimation";
 
 export default function LiveTrackingPage() {
   const [gpsData, setGpsData] = useState([]);
   const [maxSpeeds, setMaxSpeeds] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [connected, setConnected] = useState(false);   // SSE live indicator
+  const [pushCount, setPushCount] = useState(0);        // increments each SSE push → triggers marker update
   const [selectedVehicleId, setSelectedVehicleId] = useState(null);
   const [lastUpdated, setLastUpdated] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL"); // ALL, RUNNING, IDLE, STOPPED
   const [viewMode, setViewMode] = useState("Map"); // Map or Satellite
 
+  const [mapReady, setMapReady] = useState(false);
   const isInitialFetch = useRef(true);
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const markersRef = useRef({});
+  const animMarkersRef = useRef({});   // deviceId → AnimatedMarker (replaces markersRef)
   const tileLayerRef = useRef(null);
 
-  // Keep a mutable ref of selectedVehicleId to avoid stale closures in the fetch interval
+  // Keep a mutable ref of selectedVehicleId to avoid stale closures
   const selectedVehicleIdRef = useRef(selectedVehicleId);
   useEffect(() => {
     selectedVehicleIdRef.current = selectedVehicleId;
   }, [selectedVehicleId]);
 
-  // Fetch real-time GPS telemetry from Next.js server proxy route
-  const fetchGpsData = async () => {
-    try {
-      const res = await fetch("/api/gps?t=" + Date.now());
-      const json = await res.json();
-      if (json.success && json.data?.object) {
-        const sorted = json.data.object.sort((a, b) => {
-          const numA = parseInt(a.name.replace(/\D/g, "")) || 0;
-          const numB = parseInt(b.name.replace(/\D/g, "")) || 0;
-          return numA - numB;
+  // ── SSE connection — replaces old setInterval polling ──────────────────────
+  useEffect(() => {
+    const todayStr = new Date().toLocaleDateString("en-CA");
+
+    const cleanup = connectGpsStream(
+      (objects) => {
+        const sorted = [...objects].sort((a, b) => {
+          const nA = parseInt(a.name?.replace(/\D/g, "") || "0") || 0;
+          const nB = parseInt(b.name?.replace(/\D/g, "") || "0") || 0;
+          return nA - nB;
         });
 
-        // Track max speeds in state & localStorage
-        const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD local format
+        // Track max speeds
         setMaxSpeeds(prev => {
           const updated = { ...prev };
           let changed = false;
-
           sorted.forEach(v => {
             const speedKmh = knotsToKmh(v.speed);
             const storageKey = `maxSpeed_${v.deviceUniqueId}_${todayStr}`;
-            
             let currentMax = updated[v.deviceUniqueId];
             if (currentMax === undefined) {
               const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey) : null;
               currentMax = stored ? parseFloat(stored) : 0;
             }
-
             if (speedKmh > currentMax) {
-              currentMax = speedKmh;
-              if (typeof window !== "undefined") {
-                localStorage.setItem(storageKey, currentMax.toString());
-              }
-              updated[v.deviceUniqueId] = currentMax;
+              updated[v.deviceUniqueId] = speedKmh;
               changed = true;
-            } else if (updated[v.deviceUniqueId] === undefined) {
+              if (typeof window !== "undefined") localStorage.setItem(storageKey, String(speedKmh));
+            } else {
               updated[v.deviceUniqueId] = currentMax;
-              changed = true;
             }
           });
-
           return changed ? updated : prev;
         });
 
         setGpsData(sorted);
-        setError(null);
-        
-        // Auto-select first vehicle if none is selected yet (using ref to avoid stale closures)
+        setConnected(true);
+        setLoading(false);
+        setLastUpdated(new Date().toLocaleTimeString("en-IN"));
+        setPushCount(c => c + 1);
+
         if (sorted.length > 0 && selectedVehicleIdRef.current === null) {
           setSelectedVehicleId(sorted[0].deviceUniqueId);
         }
+      },
+      () => setConnected(false)
+    );
 
-        // Fit map bounds to show ALL vehicles on first load
-        if (isInitialFetch.current && sorted.length > 0 && mapInstanceRef.current) {
-          import("leaflet").then((L) => {
-            const map = mapInstanceRef.current;
-            const validLatLngs = sorted
-              .filter(v => v.latitude && v.longitude)
-              .map(v => L.latLng(v.latitude, v.longitude));
-            if (validLatLngs.length > 0) {
-              const bounds = L.latLngBounds(validLatLngs);
-              map.fitBounds(bounds, { padding: [80, 80] });
-            }
-          });
-        }
-      } else {
-        setError("GPS service offline.");
-      }
-    } catch (err) {
-      console.error("GPS Fetch Error:", err);
-      setError("Sync error with tracking server.");
-    } finally {
-      setLoading(false);
-      isInitialFetch.current = false;
-      setLastUpdated(new Date().toLocaleTimeString("en-IN"));
-    }
-  };
+    return cleanup;
+  }, []);
 
   // Initialize Map
   useEffect(() => {
@@ -169,6 +147,7 @@ export default function LiveTrackingPage() {
       }).addTo(map);
 
       mapInstanceRef.current = map;
+      setMapReady(true);
 
       // Invalidate map size after small delay for correct rendering in flex parent
       setTimeout(() => {
@@ -179,9 +158,13 @@ export default function LiveTrackingPage() {
     initMap();
 
     return () => {
+      // Cleanup animated markers before removing map
+      Object.values(animMarkersRef.current).forEach(m => m.remove());
+      animMarkersRef.current = {};
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
+        setMapReady(false);
       }
     };
   }, []);
@@ -206,99 +189,125 @@ export default function LiveTrackingPage() {
     });
   }, [viewMode]);
 
-  // Update Markers dynamically when gpsData changes
+  // Combine raw GPS values with our plate/driver registry metadata
+  const getVehicleCombinedData = (gpsItem) => {
+    if (!gpsItem) return null;
+    const enriched = enrichGpsVehicle(gpsItem);
+    if (!enriched) return null;
+
+    const serverDate = new Date(gpsItem.serverTime || gpsItem.timestamp || Date.now());
+    const now = new Date();
+    const hoursSinceUpdate = Math.max(0, (now - serverDate) / 3600000);
+    
+    const ignOffHrs = Math.floor(hoursSinceUpdate);
+    const ignOffMins = Math.floor((hoursSinceUpdate - ignOffHrs) * 60);
+    const ignOffStr = `${String(ignOffHrs).padStart(2, '0')}h:${String(ignOffMins).padStart(2, '0')}m`;
+
+    const maxSpeedVal = maxSpeeds[gpsItem.deviceUniqueId] || 0;
+    const maxSpeedDisplay = maxSpeedVal > 0 ? `${maxSpeedVal.toFixed(1)} km/h` : "0.0 km/h";
+
+    const speedVal = enriched.speedKmh || 0;
+    let eta = "--";
+    if (enriched.status === "RUNNING") {
+      const etaMins = Math.max(5, Math.round(120 / (speedVal / 10 + 1)));
+      eta = `${etaMins} mins`;
+    } else if (enriched.status === "IDLE") {
+      eta = "Standby";
+    }
+
+    const distFromLastStop = enriched.status === "RUNNING"
+      ? (parseFloat(enriched.todayDistKm) * 0.35).toFixed(2) + " km"
+      : "0.00 km";
+
+    return {
+      ...enriched,
+      driver: enriched.driverName,
+      phone: enriched.driverPhone,
+      location: enriched.address,
+      battery: enriched.batteryDisplay,
+      totalDistanceKm: enriched.totalDistDisplay,
+      todayDistanceKm: enriched.todayDistDisplay,
+      time: enriched.formattedTime,
+      speedKmh: enriched.speedDisplay,
+      maxSpeed: maxSpeedDisplay,
+      eta,
+      distFromLastStop,
+      todayRunning: enriched.status === "RUNNING" ? "Active" : "--",
+      todayStopped: enriched.status === "STOPPED" ? ignOffStr : "--",
+      todayIdle: enriched.status === "IDLE" ? "Active" : "--",
+      ignitionOffSince: enriched.isIgnitionOn ? "--" : ignOffStr,
+    };
+  };
+
+  // Count by status
+  const runningCount = gpsData.filter(v => v.attributes?.ignition === true && (v.speed > 0 || v.attributes?.motion === true)).length;
+  const idleCount = gpsData.filter(v => v.attributes?.ignition === true && (v.speed === 0 && !v.attributes?.motion)).length;
+  const stoppedCount = gpsData.filter(v => !v.attributes?.ignition).length;
+
+  const filteredVehicles = gpsData.filter(v => {
+    const isIgnitionOn = v.attributes?.ignition === true;
+    const isMoving = v.speed > 0 || v.attributes?.motion === true;
+    const status = !isIgnitionOn ? "STOPPED" : (isMoving ? "RUNNING" : "IDLE");
+
+    const matchesStatus = statusFilter === "ALL" || status === statusFilter;
+    const matchesSearch = v.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          v.deviceUniqueId.includes(searchQuery);
+
+    return matchesStatus && matchesSearch;
+  });
+
+  // ── Smooth animated marker updates (SSE push → Uber-style animation) ────────
   useEffect(() => {
-    if (!mapInstanceRef.current || gpsData.length === 0) return;
+    if (!mapInstanceRef.current || !mapReady) return;
 
-    import("leaflet").then((L) => {
+    import("leaflet").then(({ default: L }) => {
       const map = mapInstanceRef.current;
+      if (!map) return;
 
-      gpsData.forEach((v) => {
+      filteredVehicles.forEach((v) => {
         const details = getVehicleCombinedData(v);
         if (!v.latitude || !v.longitude) return;
 
+        const devKey = String(v.deviceUniqueId || v.id);
         const isSelected = selectedVehicleId === v.deviceUniqueId;
         const isIgnitionOn = v.attributes?.ignition === true;
         const isMoving = v.speed > 0 || v.attributes?.motion === true;
-        
-        // Color-code: Green for running, Orange for idle, Red for stopped
-        const carColor = !isIgnitionOn ? "#ef4444" : (isMoving ? "#10b981" : "#f59e0b");
+        const speedKmh = knotsToKmh(v.speed);
+
+        const carColor  = !isIgnitionOn ? "#ef4444" : (isMoving ? "#10b981" : "#f59e0b");
         const pingColor = !isIgnitionOn ? "border-red-500" : (isMoving ? "border-emerald-500" : "border-amber-500");
         const courseRotation = v.course || 0;
 
         const iconHtml = `
           <div class="relative w-12 h-12 flex items-center justify-center">
             ${isSelected ? `<div class="absolute w-[56px] h-[56px] rounded-full border-2 ${pingColor} animate-ping opacity-30 z-0"></div>` : ""}
-            
-            <!-- Realistic Top-down Ambulance/Vehicle Marker -->
-            <div class="relative w-12 h-12 z-10 transition-transform duration-300 flex items-center justify-center">
-              <svg viewBox="0 0 100 100" class="w-full h-full" style="transform: rotate(${courseRotation}deg); transition: transform 0.8s ease; filter: drop-shadow(0px 3px 5px rgba(0,0,0,0.3));">
-                <!-- Wheels -->
-                <rect x="25" y="22" width="8" height="16" rx="2" fill="#1e293b" />
-                <rect x="67" y="22" width="8" height="16" rx="2" fill="#1e293b" />
-                <rect x="24" y="66" width="9" height="18" rx="2" fill="#1e293b" />
-                <rect x="67" y="66" width="9" height="18" rx="2" fill="#1e293b" />
-                
-                <!-- Rear bumper -->
-                <rect x="33" y="86" width="34" height="4" rx="1.5" fill="#475569" />
-
-                <!-- Car/Ambulance Body -->
+            <div class="relative w-12 h-12 z-10 flex items-center justify-center" style="transform: rotate(${courseRotation}deg); transition: transform 1.2s ease-in-out;">
+              <svg viewBox="0 0 100 100" class="w-full h-full" style="filter: drop-shadow(0px 3px 5px rgba(0,0,0,0.3));">
+                <rect x="25" y="22" width="8"  height="16" rx="2" fill="#1e293b" />
+                <rect x="67" y="22" width="8"  height="16" rx="2" fill="#1e293b" />
+                <rect x="24" y="66" width="9"  height="18" rx="2" fill="#1e293b" />
+                <rect x="67" y="66" width="9"  height="18" rx="2" fill="#1e293b" />
+                <rect x="33" y="86" width="34" height="4"  rx="1.5" fill="#475569" />
                 <path d="M 50,12 C 40,12 32,16 32,26 L 32,38 C 30,40 30,42 30,45 L 30,82 C 30,86 34,88 38,88 L 62,88 C 66,88 70,86 70,82 L 70,45 C 70,42 70,40 68,38 L 68,26 C 68,16 60,12 50,12 Z" fill="${carColor}" stroke="#1e293b" stroke-width="1.5" />
-
-                <!-- Hood lines/details -->
-                <path d="M 38,24 C 44,22 56,22 62,24" fill="none" stroke="#1e293b" stroke-width="1" opacity="0.4" />
-                <path d="M 42,17 L 42,20 M 58,17 L 58,20" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.6" />
-
-                <!-- Front Windshield -->
                 <path d="M 36,29 C 36,27 38,26 50,26 C 62,26 64,27 64,29 L 66,36 C 66,37 65,38 64,38 L 36,38 C 35,38 34,37 34,36 Z" fill="#0f172a" />
                 <path d="M 38,29 L 46,29 L 42,35 L 36,35 Z" fill="#ffffff" opacity="0.25" />
-
-                <!-- Side Mirrors -->
-                <path d="M 27,33 C 25,33 25,36 27,37 L 30,37 L 30,33 Z" fill="#334155" stroke="#1e293b" stroke-width="0.8" />
-                <path d="M 73,33 C 75,33 75,36 73,37 L 70,37 L 70,33 Z" fill="#334155" stroke="#1e293b" stroke-width="0.8" />
-
-                <!-- Cabin Roof Cut/Divide line -->
-                <line x1="30" y1="45" x2="70" y2="45" stroke="#1e293b" stroke-width="1" opacity="0.3" />
-
-                <!-- Left & Right Cab Windows -->
-                <path d="M 32,41 L 32,49 L 33.5,48 L 33.5,41.5 Z" fill="#0f172a" opacity="0.9" />
-                <path d="M 68,41 L 68,49 L 66.5,48 L 66.5,41.5 Z" fill="#0f172a" opacity="0.9" />
-
-                <!-- Rear Cargo Area Windows -->
-                <path d="M 31.5,53 L 31.5,72 L 33,71 L 33,54 Z" fill="#0f172a" opacity="0.9" />
-                <path d="M 68.5,53 L 68.5,72 L 67,71 L 67,54 Z" fill="#0f172a" opacity="0.9" />
-
-                <!-- Rear Window -->
-                <path d="M 38,85 L 62,85 L 61,87 L 39,87 Z" fill="#0f172a" />
-
-                <!-- Emergency Beacon Lightbar -->
                 <rect x="36" y="38" width="28" height="4" rx="1" fill="#1e293b" />
-                <!-- Blue light -->
                 <rect x="37" y="37.5" width="11" height="5" rx="1" fill="#3b82f6" />
                 <circle cx="42.5" cy="40" r="3" fill="#60a5fa" opacity="0.8" />
-                <!-- Red light -->
                 <rect x="52" y="37.5" width="11" height="5" rx="1" fill="#ef4444" />
                 <circle cx="57.5" cy="40" r="3" fill="#f87171" opacity="0.8" />
-                <!-- Center white/amber warning light -->
                 <rect x="48" y="38" width="4" height="4" fill="#f59e0b" />
-
-                <!-- Medical Cross roof decal -->
                 <circle cx="50" cy="62" r="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="0.8" />
-                <!-- Red Cross -->
                 <path d="M 50,56 L 50,68 M 44,62 L 56,62" stroke="#dc2626" stroke-width="3" stroke-linecap="square" />
               </svg>
             </div>
-            
-            <!-- Floating Tooltip Label above the car -->
-            <div class="absolute bottom-[56px] left-1/2 -translate-x-1/2 bg-white border ${isSelected ? "border-slate-800 font-extrabold text-blue-700 shadow-md scale-105" : "border-slate-200 shadow-2xs font-semibold text-slate-700"} px-2.5 py-0.5 rounded-lg whitespace-nowrap text-[9px] z-50 transition-all leading-tight">
+            <div class="absolute bottom-[56px] left-1/2 -translate-x-1/2 bg-white border ${isSelected ? "border-slate-800 font-extrabold text-blue-700 shadow-md scale-105" : "border-slate-200 font-semibold text-slate-700"} px-2.5 py-0.5 rounded-lg whitespace-nowrap text-[9px] z-50 leading-tight shadow-sm">
               ${details.plate}${details.alias}
             </div>
-            
-            <!-- Tooltip arrow pointing down -->
             <div class="absolute bottom-[48px] left-1/2 -translate-x-1/2 w-2 h-2 bg-white border-b border-r ${isSelected ? "border-slate-800" : "border-slate-200"} rotate-45 z-40"></div>
           </div>
         `;
- 
+
         const customIcon = L.divIcon({
           className: "custom-leaflet-marker",
           html: iconHtml,
@@ -306,29 +315,35 @@ export default function LiveTrackingPage() {
           iconAnchor: [24, 24],
         });
 
-        if (markersRef.current[v.deviceUniqueId]) {
-          const marker = markersRef.current[v.deviceUniqueId];
-          marker.setLatLng([v.latitude, v.longitude]);
-          marker.setIcon(customIcon);
+        if (animMarkersRef.current[devKey]) {
+          // ★ Smooth animation — only moves if GPS position actually changed
+          animMarkersRef.current[devKey].animateTo(
+            [v.latitude, v.longitude],
+            courseRotation,
+            1600
+          );
+          animMarkersRef.current[devKey].setIcon(customIcon);
         } else {
-          const marker = L.marker([v.latitude, v.longitude], { icon: customIcon })
-            .addTo(map)
-            .on("click", () => {
-              setSelectedVehicleId(v.deviceUniqueId);
-            });
-          markersRef.current[v.deviceUniqueId] = marker;
+          const anim = createAnimatedMarker(
+            L,
+            [v.latitude, v.longitude],
+            customIcon,
+            map,
+            () => setSelectedVehicleId(devKey)
+          );
+          animMarkersRef.current[devKey] = anim;
         }
       });
 
-      // Cleanup removed markers
-      Object.keys(markersRef.current).forEach((id) => {
-        if (!gpsData.some((v) => v.deviceUniqueId === id)) {
-          map.removeLayer(markersRef.current[id]);
-          delete markersRef.current[id];
+      // Remove markers for vehicles no longer in filtered list
+      Object.keys(animMarkersRef.current).forEach((id) => {
+        if (!filteredVehicles.some((v) => String(v.deviceUniqueId || v.id) === id)) {
+          animMarkersRef.current[id].remove();
+          delete animMarkersRef.current[id];
         }
       });
     });
-  }, [gpsData, selectedVehicleId]);
+  }, [filteredVehicles, selectedVehicleId, mapReady, pushCount]);
 
   // Center map on selected vehicle
   useEffect(() => {
@@ -356,76 +371,12 @@ export default function LiveTrackingPage() {
     }
   }, [gpsData]);
 
-  useEffect(() => {
-    fetchGpsData();
-    const interval = setInterval(fetchGpsData, 4000);
-    return () => clearInterval(interval);
-  }, []);
+  // (Polling removed — SSE stream above handles all updates)
 
   // Find currently selected vehicle object from state array
   const selectedGpsVehicle = gpsData.find(v => v.deviceUniqueId === selectedVehicleId) || null;
   
-  // Combine raw GPS values with our plate/driver registry metadata
-  // Uses shared gpsUtils for all conversions (battery mV→%, speed knots→km/h, distance m→km)
-  const getVehicleCombinedData = (gpsItem) => {
-    if (!gpsItem) return null;
-    const enriched = enrichGpsVehicle(gpsItem);
-    if (!enriched) return null;
-
-    // Calculate time-based stats from serverTime
-    const serverDate = new Date(gpsItem.serverTime || gpsItem.timestamp || Date.now());
-    const now = new Date();
-    const hoursSinceUpdate = Math.max(0, (now - serverDate) / 3600000);
-    
-    // Calculate ignition off duration from last update if stopped
-    const ignOffHrs = Math.floor(hoursSinceUpdate);
-    const ignOffMins = Math.floor((hoursSinceUpdate - ignOffHrs) * 60);
-    const ignOffStr = `${String(ignOffHrs).padStart(2, '0')}h:${String(ignOffMins).padStart(2, '0')}m`;
-
-    const maxSpeedVal = maxSpeeds[gpsItem.deviceUniqueId] || 0;
-    const maxSpeedDisplay = maxSpeedVal > 0 ? `${maxSpeedVal.toFixed(1)} km/h` : "0.0 km/h";
-
-    const speedVal = enriched.speedKmh || 0;
-    let eta = "--";
-    if (enriched.status === "RUNNING") {
-      const etaMins = Math.max(5, Math.round(120 / (speedVal / 10 + 1)));
-      eta = `${etaMins} mins`;
-    } else if (enriched.status === "IDLE") {
-      eta = "Standby";
-    }
-
-    const distFromLastStop = enriched.status === "RUNNING"
-      ? (parseFloat(enriched.todayDistKm) * 0.35).toFixed(2) + " km"
-      : "0.00 km";
-
-    return {
-      ...enriched,
-      // Compatibility aliases for existing JSX
-      driver: enriched.driverName,
-      phone: enriched.driverPhone,
-      location: enriched.address,
-      battery: enriched.batteryDisplay,
-      totalDistanceKm: enriched.totalDistDisplay,
-      todayDistanceKm: enriched.todayDistDisplay,
-      time: enriched.formattedTime,
-      speedKmh: enriched.speedDisplay,
-      maxSpeed: maxSpeedDisplay,
-      eta,
-      distFromLastStop,
-      // Time-based values — show real ignition off duration, not hardcoded
-      todayRunning: enriched.status === "RUNNING" ? "Active" : "--",
-      todayStopped: enriched.status === "STOPPED" ? ignOffStr : "--",
-      todayIdle: enriched.status === "IDLE" ? "Active" : "--",
-      ignitionOffSince: enriched.isIgnitionOn ? "--" : ignOffStr,
-    };
-  };
-
   const selectedVehicleDetails = getVehicleCombinedData(selectedGpsVehicle);
-
-  const filteredVehicles = gpsData.filter(v => 
-    v.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    v.deviceUniqueId.includes(searchQuery)
-  );
 
   // Dynamic Fleet KPIs
   const totalFleetDistanceMeters = gpsData.reduce((acc, v) => acc + (parseFloat(v.attributes?.todayDistance) || 0), 0);
@@ -498,11 +449,39 @@ export default function LiveTrackingPage() {
           </span>
         </div>
 
-        {/* Date picker mock */}
-        <div className="flex items-center gap-3">
-          <select className="h-9 px-3.5 bg-white border border-slate-200 rounded-xl text-[11.5px] font-bold text-gray-650 focus:outline-none shadow-3xs cursor-pointer">
-            <option>All Ambulances</option>
+        {/* Status Filter & Vehicle Select Dropdowns */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Status Filter Dropdown */}
+          <select 
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="h-9 px-3.5 bg-white border border-slate-200 rounded-xl text-[11.5px] font-extrabold text-slate-700 focus:outline-none shadow-3xs cursor-pointer hover:border-slate-300 transition"
+          >
+            <option value="ALL">All Status ({gpsData.length})</option>
+            <option value="RUNNING">Running ({runningCount})</option>
+            <option value="IDLE">Idle ({idleCount})</option>
+            <option value="STOPPED">Stopped ({stoppedCount})</option>
           </select>
+
+          {/* Vehicle Selector Dropdown */}
+          <select
+            value={selectedVehicleId || ""}
+            onChange={(e) => {
+              if (e.target.value) setSelectedVehicleId(e.target.value);
+            }}
+            className="h-9 px-3 bg-white border border-slate-200 rounded-xl text-[11.5px] font-bold text-slate-700 focus:outline-none shadow-3xs cursor-pointer max-w-[200px] hover:border-slate-300 transition"
+          >
+            <option value="">All Vehicles ({filteredVehicles.length})</option>
+            {filteredVehicles.map(v => {
+              const details = getVehicleCombinedData(v);
+              return (
+                <option key={v.deviceUniqueId} value={v.deviceUniqueId}>
+                  {details.plate} {details.alias}
+                </option>
+              );
+            })}
+          </select>
+
           <div className="h-9 px-3.5 bg-white border border-slate-200 rounded-xl text-[11.5px] font-bold text-gray-650 flex items-center gap-2 shadow-3xs">
             <Calendar className="w-3.5 h-3.5 text-gray-450" />
             <span>02 Jun, 2026</span>
@@ -782,7 +761,7 @@ export default function LiveTrackingPage() {
                 <div className="bg-slate-50/60 border border-slate-100 p-2.5 rounded-xl flex flex-col">
                   <span className="text-[8px] text-gray-400 uppercase font-bold tracking-wider">Charging</span>
                   <span className={`text-[10px] font-black mt-0.5 ${selectedVehicleDetails.isCharging ? "text-emerald-600" : "text-slate-800"}`}>
-                    {selectedVehicleDetails.isCharging ? "Yes ⚡" : "No"}
+                    {selectedVehicleDetails.isCharging ? "Yes (Connected)" : "No"}
                   </span>
                 </div>
               </div>
@@ -805,10 +784,13 @@ export default function LiveTrackingPage() {
             {/* Bottom case details link */}
             <a 
               href="/admin/cases"
-              className="w-full h-10 bg-slate-900 hover:bg-slate-850 text-white font-bold rounded-xl flex items-center justify-center gap-1.5 mt-4 transition text-[11.5px] shadow-3xs cursor-pointer active:scale-[0.98]"
+              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-extrabold rounded-xl flex items-center justify-between mt-4 transition text-[12px] shadow-sm cursor-pointer group active:scale-[0.98]"
             >
-              <span>Dispatch Center Cases</span>
-              <Globe className="w-3.5 h-3.5" />
+              <span className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-blue-400 group-hover:rotate-12 transition-transform" />
+                <span>Dispatch Center Cases</span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
             </a>
 
           </div>
@@ -835,7 +817,7 @@ export default function LiveTrackingPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 text-[12px] text-slate-700">
-              {gpsData.map((v) => {
+              {filteredVehicles.map((v) => {
                 const details = getVehicleCombinedData(v);
                 if (!details) return null;
                 const isSelected = selectedVehicleId === v.deviceUniqueId;

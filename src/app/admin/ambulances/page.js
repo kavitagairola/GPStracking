@@ -4,9 +4,9 @@ import React, { useState, useEffect } from "react";
 import { 
   Search, Truck, Battery, Radio, Zap, Clock, Key, RefreshCw, 
   Compass, AlertCircle, CheckCircle, Navigation, Plus, Sliders, 
-  ChevronLeft, ChevronRight, Eye, Edit3, MoreVertical
+  ChevronLeft, ChevronRight, Eye, Edit3, MoreVertical, X, Save
 } from "lucide-react";
-import { DRIVERS_LIST, enrichGpsVehicle } from "@/lib/gpsUtils";
+import { enrichGpsVehicle } from "@/lib/gpsUtils";
 
 // Inline SVG representing a premium side-view profile of an ambulance van
 const AmbulanceVanIcon = () => (
@@ -25,30 +25,17 @@ const AmbulanceVanIcon = () => (
   </svg>
 );
 
-// Map dynamic initial list of 40 vehicles, ensuring each gets assigned a driver
-const initialAmbulancesRegistry = Array.from({ length: 40 }, (_, idx) => {
-  const num = idx + 1;
-  const drv = DRIVERS_LIST[(num - 1) % DRIVERS_LIST.length];
-  return {
-    id: `AMB-${String(num).padStart(3, "0")}`,
-    vehicleName: `Ambulance ${String(num).padStart(2, "0")}`,
-    registration: `HR-55-${1000 + num}`,
-    typeName: num % 3 === 0 ? "Tata Winger" : num % 3 === 1 ? "Force Traveller" : "Maruti Eeco",
-    typeDesc: "Rescue Van",
-    driverName: drv.name,
-    driverPhone: drv.phone,
-    status: "Active",
-    battery: 100,
-    ignition: false,
-    coordinates: "Calculating...",
-    gpsImei: ""
-  };
-});
-
 export default function AmbulancesPage() {
-  const [ambulances, setAmbulances] = useState(initialAmbulancesRegistry);
+  const [ambulances, setAmbulances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [gpsData, setGpsData] = useState([]);
+
+  // Add modal
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({ ambulance_number: "", registration: "", type_name: "Force Traveller", driver_name: "", driver_phone: "" });
+  const [addLoading, setAddLoading] = useState(false);
+  const [addError, setAddError] = useState("");
   
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -62,61 +49,72 @@ export default function AmbulancesPage() {
 
   const [lastUpdated, setLastUpdated] = useState("");
 
-  const fetchAmbulanceData = async () => {
+  // Fetch ambulances from DB
+  const fetchAmbulances = async () => {
     try {
-      const res = await fetch("/api/gps?t=" + Date.now());
+      const res = await fetch("/api/ambulances");
       const json = await res.json();
-      if (json.success && json.data?.object) {
-        // Build a map of driverName -> enriched GPS data
-        const gpsVehicles = json.data.object.map(v => enrichGpsVehicle(v)).filter(Boolean);
-        const driverGpsMap = {};
-        gpsVehicles.forEach(v => {
-          driverGpsMap[v.driverName] = v;
-        });
-
-        // Map GPS data properties onto our list dynamically
-        const updated = initialAmbulancesRegistry.map((amb) => {
-          const gpsMatch = driverGpsMap[amb.driverName];
-          
-          if (gpsMatch) {
-            return {
-              ...amb,
-              registration: gpsMatch.plate,
-              status: "Active",
-              gpsImei: gpsMatch.deviceUniqueId,
-              battery: gpsMatch.batteryPct,
-              ignition: gpsMatch.isIgnitionOn,
-              gpsPlate: gpsMatch.plate,
-              coordinates: gpsMatch.latitude && gpsMatch.longitude 
-                ? `${gpsMatch.latitude.toFixed(5)}, ${gpsMatch.longitude.toFixed(5)}` 
-                : "Online",
-            };
-          }
-          return amb;
-        });
-
-        setAmbulances(updated);
+      if (json.success) {
+        setAmbulances(json.data);
         setError(null);
       } else {
-        setError("GPS service unavailable.");
+        setError("Failed to load ambulances.");
       }
-    } catch (err) {
-      console.error(err);
-      setError("Network sync error with GPS network.");
+    } catch {
+      setError("Network error loading ambulances.");
     } finally {
       setLoading(false);
       setLastUpdated(new Date().toLocaleTimeString("en-IN"));
     }
   };
 
+  // Fetch live GPS for overlay
+  const fetchGps = async () => {
+    try {
+      const res = await fetch("/api/gps?t=" + Date.now());
+      const json = await res.json();
+      if (json.success && json.data?.object) {
+        setGpsData(json.data.object);
+      }
+    } catch {}
+  };
+
   useEffect(() => {
-    fetchAmbulanceData();
-    const interval = setInterval(fetchAmbulanceData, 8000);
+    fetchAmbulances();
+    fetchGps();
+    const interval = setInterval(fetchGps, 8000);
     return () => clearInterval(interval);
   }, []);
 
+  // Merge DB ambulances with live GPS data
+  const gpsVehicles = gpsData.map(v => enrichGpsVehicle(v)).filter(Boolean);
+  const gpsMap = {};
+  gpsVehicles.forEach(v => { if (v.num) gpsMap[v.num] = v; });
+
+  const enrichedAmbulances = ambulances.map(amb => {
+    const num = amb.ambulance_number;
+    const gps = gpsMap[num];
+    return {
+      id: amb.id,
+      vehicleName: amb.vehicle_name,
+      registration: gps ? gps.plate : amb.registration,
+      typeName: amb.type_name,
+      typeDesc: amb.type_desc || "Rescue Van",
+      driverName: amb.driver_name || "Not Assigned",
+      driverPhone: amb.driver_phone || "—",
+      status: gps ? (gps.status === "RUNNING" ? "Running" : gps.status === "IDLE" ? "Idle" : "Active") : amb.status,
+      battery: gps ? (gps.batteryPct ?? 100) : 100,
+      ignition: gps ? gps.isIgnitionOn : false,
+      coordinates: gps && gps.latitude ? `${gps.latitude.toFixed(5)}, ${gps.longitude.toFixed(5)}` : "Calculating...",
+      gpsImei: gps ? gps.deviceUniqueId : "",
+      gpsPlate: gps ? gps.plate : amb.registration,
+      speedDisplay: gps ? gps.speedDisplay : "0.0 km/h",
+      address: gps ? gps.address : "",
+    };
+  });
+
   // Filter logic
-  const filteredAmbulances = ambulances.filter(a => {
+  const filteredAmbulances = enrichedAmbulances.filter(a => {
     const matchesSearch = 
       a.vehicleName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       a.registration.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -150,11 +148,33 @@ export default function AmbulancesPage() {
   const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
   const paginatedAmbulances = filteredAmbulances.slice(startIndex, startIndex + itemsPerPage);
 
+  // Add ambulance
+  const handleAddAmbulance = async (e) => {
+    e.preventDefault();
+    setAddLoading(true); setAddError("");
+    try {
+      const res = await fetch("/api/ambulances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(addForm),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setShowAddModal(false);
+        setAddForm({ ambulance_number: "", registration: "", type_name: "Force Traveller", driver_name: "", driver_phone: "" });
+        fetchAmbulances();
+      } else {
+        setAddError(json.error || "Failed to add ambulance");
+      }
+    } catch { setAddError("Network error"); }
+    finally { setAddLoading(false); }
+  };
+
   // Stats calculation
-  const totalCount = ambulances.length;
-  const activeCount = ambulances.filter(a => a.status === "Active").length;
-  const maintenanceCount = ambulances.filter(a => a.status === "Maintenance").length;
-  const inactiveCount = ambulances.filter(a => a.status === "Inactive").length;
+  const totalCount = enrichedAmbulances.length;
+  const activeCount = enrichedAmbulances.filter(a => a.status === "Active" || a.status === "Running" || a.status === "Idle").length;
+  const maintenanceCount = enrichedAmbulances.filter(a => a.status === "Maintenance").length;
+  const inactiveCount = enrichedAmbulances.filter(a => a.status === "Inactive").length;
 
   return (
     <div className="flex flex-col gap-6 w-full text-[#1e293b] relative">
@@ -169,7 +189,10 @@ export default function AmbulancesPage() {
             <span className="text-gray-600">Ambulances</span>
           </div>
         </div>
-        <button className="bg-[#00875A] hover:bg-[#00704a] text-white px-4 py-2.5 rounded-lg text-[12px] font-extrabold flex items-center gap-2 shadow-2xs transition active:scale-[0.98] cursor-pointer">
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="bg-[#00875A] hover:bg-[#00704a] text-white px-4 py-2.5 rounded-lg text-[12px] font-extrabold flex items-center gap-2 shadow-2xs transition active:scale-[0.98] cursor-pointer"
+        >
           <Plus className="w-4 h-4" />
           <span>Add New Ambulance</span>
         </button>
@@ -277,8 +300,8 @@ export default function AmbulancesPage() {
               className="h-10 px-3 bg-gray-50 border border-slate-200 rounded-xl text-[12px] font-bold text-gray-650 focus:outline-none focus:bg-white focus:border-gray-300 transition-all cursor-pointer min-w-[150px]"
             >
               <option value="All Drivers">All Drivers</option>
-              {DRIVERS_LIST.map(d => (
-                <option key={d.name} value={d.name}>{d.name}</option>
+              {[...new Set(enrichedAmbulances.map(a => a.driverName).filter(Boolean))].map(name => (
+                <option key={name} value={name}>{name}</option>
               ))}
             </select>
           </div>
@@ -487,6 +510,67 @@ export default function AmbulancesPage() {
               </div>
             </div>
           )}
+        </div>
+      )}\n
+      {/* Add Ambulance Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[16px] font-black text-slate-800">Add New Ambulance</h2>
+              <button onClick={() => { setShowAddModal(false); setAddError(""); }} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {addError && <p className="text-rose-500 text-[12px] font-bold bg-rose-50 px-3 py-2 rounded-xl">{addError}</p>}
+            <form onSubmit={handleAddAmbulance} className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ambulance No. *</label>
+                  <input required type="number" min="1" value={addForm.ambulance_number}
+                    onChange={e => setAddForm(f => ({ ...f, ambulance_number: e.target.value }))}
+                    placeholder="e.g. 41"
+                    className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Registration No.</label>
+                  <input value={addForm.registration}
+                    onChange={e => setAddForm(f => ({ ...f, registration: e.target.value }))}
+                    placeholder="HR-55-1041"
+                    className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div className="flex flex-col gap-1 col-span-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Vehicle Type</label>
+                  <select value={addForm.type_name} onChange={e => setAddForm(f => ({ ...f, type_name: e.target.value }))}
+                    className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-bold outline-none focus:border-emerald-500">
+                    <option value="Force Traveller">Force Traveller</option>
+                    <option value="Tata Winger">Tata Winger</option>
+                    <option value="Maruti Eeco">Maruti Eeco</option>
+                    <option value="Bolero Camper">Bolero Camper</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Driver Name</label>
+                  <input value={addForm.driver_name}
+                    onChange={e => setAddForm(f => ({ ...f, driver_name: e.target.value }))}
+                    placeholder="e.g. Ramesh Kumar"
+                    className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Driver Phone</label>
+                  <input value={addForm.driver_phone}
+                    onChange={e => setAddForm(f => ({ ...f, driver_phone: e.target.value }))}
+                    placeholder="9876543210"
+                    className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] focus:outline-none focus:border-emerald-500" />
+                </div>
+              </div>
+              <button type="submit" disabled={addLoading}
+                className="h-10 bg-[#00875A] hover:bg-[#00704a] text-white rounded-xl text-[12.5px] font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50">
+                <Save className="w-4 h-4" />
+                {addLoading ? "Saving..." : "Save Ambulance"}
+              </button>
+            </form>
+          </div>
         </div>
       )}
     </div>

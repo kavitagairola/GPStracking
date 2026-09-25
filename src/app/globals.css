@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-montserrat), sans-serif;
+  --font-sans: var(--font-manrope), sans-serif;
   --color-background: #f5f6f8;
   --color-foreground: #111827;
   --color-navbar: #000000;
@@ -25,5 +25,3 @@ body {
   -ms-overflow-style: none !important;
   scrollbar-width: none !important;
 }
-
-
