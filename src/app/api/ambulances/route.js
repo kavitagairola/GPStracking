@@ -61,19 +61,32 @@ export async function POST(req) {
 export async function PUT(req) {
   try {
     const body = await req.json();
-    const { id, vehicle_name, registration, type_name, driver_name, driver_phone, status } = body;
+    const { id, ambulance_number, vehicle_name, registration, type_name, type_desc, driver_name, driver_phone, status } = body;
 
     if (!id) return NextResponse.json({ success: false, error: "Missing ambulance id" }, { status: 400 });
+    if (ambulance_number !== undefined && (!Number.isInteger(Number(ambulance_number)) || Number(ambulance_number) < 1)) {
+      return NextResponse.json({ success: false, error: "Ambulance number must be a positive integer" }, { status: 400 });
+    }
+
+    if (ambulance_number !== undefined) {
+      const existing = await query(
+        "SELECT id FROM ambulances WHERE ambulance_number = $1 AND id <> $2",
+        [Number(ambulance_number), id]
+      );
+      if (existing.rows.length > 0) {
+        return NextResponse.json({ success: false, error: "Ambulance number already exists" }, { status: 409 });
+      }
+    }
 
     const updates = [];
     const values = [];
     let paramIdx = 1;
 
-    const fields = { vehicle_name, registration, type_name, driver_name, driver_phone, status };
+    const fields = { ambulance_number, vehicle_name, registration, type_name, type_desc, driver_name, driver_phone, status };
     for (const [key, val] of Object.entries(fields)) {
       if (val !== undefined) {
         updates.push(`${key} = $${paramIdx++}`);
-        values.push(val);
+        values.push(key === "ambulance_number" ? Number(val) : val);
       }
     }
 
@@ -89,6 +102,9 @@ export async function PUT(req) {
     return NextResponse.json({ success: true, data: rowToAmbulance(result.rows[0]) });
   } catch (err) {
     console.error("[Ambulances PUT Error]", err.message);
+    if (err.code === "23505") {
+      return NextResponse.json({ success: false, error: "Ambulance number already exists" }, { status: 409 });
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -99,7 +115,8 @@ export async function DELETE(req) {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ success: false, error: "Missing id" }, { status: 400 });
-    await query("DELETE FROM ambulances WHERE id = $1", [id]);
+    const result = await query("DELETE FROM ambulances WHERE id = $1", [id]);
+    if (result.rowCount === 0) return NextResponse.json({ success: false, error: "Ambulance not found" }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[Ambulances DELETE Error]", err.message);

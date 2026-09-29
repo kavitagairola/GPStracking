@@ -16,7 +16,7 @@ function DriverSidebar({ sidebarOpen, setSidebarOpen, onLogout }) {
   const [driverName, setDriverName] = useState("Raj Kumar");
 
   useEffect(() => {
-    fetch("/api/auth/me")
+   fetch("/api/auth/me?role=DRIVER") 
       .then(res => res.json())
       .then(json => {
         if (json.user && json.user.name) {
@@ -111,7 +111,7 @@ function DriverHeaderProfile() {
   const [driverName, setDriverName] = useState("Raj Kumar");
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/auth/me?role=DRIVER")
       .then(res => res.json())
       .then(json => {
         if (json.user && json.user.name) {

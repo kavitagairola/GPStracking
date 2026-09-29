@@ -460,11 +460,11 @@ export default function DriverDashboard() {
   const [activeTab, setActiveTab]   = useState("PENDING");
   const [driverName, setDriverName] = useState("Raj Kumar");
   const [driverInfo, setDriverInfo] = useState(null);
-  const [isOnDuty, setIsOnDuty]     = useState(true);
+  const [isOnDuty, setIsOnDuty]     = useState(false);
   const [togglingDuty, setTogglingDuty] = useState(false);
 
   useEffect(() => {
-    fetch("/api/auth/me")
+   fetch("/api/auth/me?role=DRIVER") 
       .then(res => res.json())
       .then(json => {
         if (json.user?.name) setDriverName(json.user.name);
@@ -506,7 +506,7 @@ export default function DriverDashboard() {
       const res = await fetch("/api/drivers", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: driverName, availability: newStatus })
+       body: JSON.stringify({ id: driverInfo?.id, availability: newStatus })
       });
       const json = await res.json();
       if (json.success) {
@@ -556,17 +556,39 @@ export default function DriverDashboard() {
       if (c.id !== caseId) return c;
       const updated = { ...c, status: newStatus };
       if (photoUrl) updated.photo = photoUrl;
-      if (newStatus === "En Route")          updated.tripStartedAt = c.tripStartedAt || nowIso;
-      if (newStatus === "Reached Location")  updated.reachedAt = c.reachedAt || nowIso;
-      if (newStatus === "Animal Picked")     updated.pickupConfirmedAt = c.pickupConfirmedAt || nowIso;
-      if (newStatus === "Hospital Reached") {
-        updated.hospitalReachedAt = c.hospitalReachedAt || nowIso;
-        updated.unloadStartedAt   = c.unloadStartedAt || nowIso;
-      }
-      if (newStatus === "Completed") {
-        updated.unloadCompletedAt = c.unloadCompletedAt || nowIso;
-        updated.completedAt = new Date().toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
-      }
+      if (newStatus === "En Route") {
+  updated.tripStartedAt = c.tripStartedAt || nowIso;
+  updated.enRouteAt = c.enRouteAt || nowIso;
+}
+
+if (newStatus === "Reached Location") {
+  updated.reachedAt = c.reachedAt || nowIso;
+}
+
+if (newStatus === "Animal Picked") {
+  updated.pickupConfirmedAt = c.pickupConfirmedAt || nowIso;
+  updated.pickupAt = c.pickupAt || nowIso;
+}
+
+if (newStatus === "Hospital Reached") {
+  updated.hospitalReachedAt = c.hospitalReachedAt || nowIso;
+  updated.hospitalRouteAt = c.hospitalRouteAt || nowIso;
+  updated.unloadStartedAt = c.unloadStartedAt || nowIso;
+}
+
+if (newStatus === "Completed") {
+  updated.unloadCompletedAt = c.unloadCompletedAt || nowIso;
+  updated.dropAt = c.dropAt || nowIso;
+  updated.completedAt =
+    c.completedAt ||
+    new Date().toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+}
       return updated;
     }));
 

@@ -174,13 +174,17 @@ export default function GpsHistoryPage() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
   const [routeData, setRouteData] = useState([]);
   const [milestones, setMilestones] = useState([]);
-  const [summaryStats, setSummaryStats] = useState({
-    distance: "24.6 km",
-    duration: "1h 00m",
-    maxSpeed: "65 km/h",
-    avgSpeed: "31 km/h"
-  });
+const [summaryStats, setSummaryStats] = useState({
+  distance: "0.0 km",
+  duration: "0m",
+  maxSpeed: "0 km/h",
+  avgSpeed: "0 km/h"
+});
   const [loading, setLoading] = useState(true);
+
+  const [historyLoading, setHistoryLoading] = useState(false);
+const [historyError, setHistoryError] = useState("");
+const [historySource, setHistorySource] = useState("");
 
   // Playback States
   const [isPlaying, setIsPlaying] = useState(false);
@@ -217,28 +221,83 @@ export default function GpsHistoryPage() {
   }, []);
 
   // Update route data when vehicle or date changes
-  useEffect(() => {
-    if (!selectedVehicleId) return;
-    setIsPlaying(false);
-    setCurrentIndex(0);
+ useEffect(() => {
+  if (!selectedVehicleId) return;
 
-    const loadHistory = async () => {
-      try {
-        const res = await fetch(`/api/gps/history?deviceUniqueId=${selectedVehicleId}&date=${selectedDate}&t=${Date.now()}`);
-        const json = await res.json();
-        if (json.success && json.data) {
-          const { route, milestones, summaryStats } = processHistoryPoints(json.data);
-          setRouteData(route);
-          setMilestones(milestones);
-          setSummaryStats(summaryStats);
+  setIsPlaying(false);
+  setCurrentIndex(0);
+  setHistoryError("");
+  setHistorySource("");
+  setHistoryLoading(true);
+
+  const loadHistory = async () => {
+    try {
+      const res = await fetch(
+        `/api/gps/history?deviceUniqueId=${encodeURIComponent(
+          selectedVehicleId
+        )}&date=${encodeURIComponent(
+          selectedDate
+        )}&t=${Date.now()}`,
+        {
+          cache: "no-store",
         }
-      } catch (err) {
-        console.error("Failed to load vehicle history:", err);
-      }
-    };
+      );
 
-    loadHistory();
-  }, [selectedVehicleId, selectedDate]);
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        throw new Error(
+          json.error || "GPS history could not be loaded."
+        );
+      }
+
+      const points = Array.isArray(json.data)
+        ? json.data
+        : [];
+
+      const {
+        route,
+        milestones,
+        summaryStats,
+      } = processHistoryPoints(points);
+
+      setRouteData(route);
+      setMilestones(milestones);
+      setSummaryStats(summaryStats);
+      setHistorySource(json.source || "");
+
+      if (points.length === 0) {
+        setHistoryError(
+          "No GPS history found for this vehicle on the selected date."
+        );
+      }
+    } catch (err) {
+      console.error(
+        "Failed to load vehicle history:",
+        err
+      );
+
+      setRouteData([]);
+      setMilestones([]);
+
+      setSummaryStats({
+        distance: "0.0 km",
+        duration: "0m",
+        maxSpeed: "0 km/h",
+        avgSpeed: "0 km/h",
+      });
+
+      setHistoryError(
+        err?.message ||
+          "Unable to load GPS history."
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  loadHistory();
+}, [selectedVehicleId, selectedDate]);
 
   // Leaflet Map Initialization
   useEffect(() => {

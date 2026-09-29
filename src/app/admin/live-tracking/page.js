@@ -103,6 +103,7 @@ export default function LiveTrackingPage() {
         });
 
         setGpsData(sorted);
+        setError(null);
         setConnected(true);
         setLoading(false);
         setLastUpdated(new Date().toLocaleTimeString("en-IN"));
@@ -112,7 +113,11 @@ export default function LiveTrackingPage() {
           setSelectedVehicleId(sorted[0].deviceUniqueId);
         }
       },
-      () => setConnected(false)
+      (streamError) => {
+        setConnected(false);
+        setError(streamError || "Live GPS connection lost.");
+        setLoading(false);
+      }
     );
 
     return cleanup;
@@ -250,8 +255,8 @@ export default function LiveTrackingPage() {
     const status = !isIgnitionOn ? "STOPPED" : (isMoving ? "RUNNING" : "IDLE");
 
     const matchesStatus = statusFilter === "ALL" || status === statusFilter;
-    const matchesSearch = v.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          v.deviceUniqueId.includes(searchQuery);
+    const matchesSearch = String(v.name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                String(v.deviceUniqueId ?? "").includes(searchQuery);
 
     return matchesStatus && matchesSearch;
   });
@@ -362,7 +367,7 @@ export default function LiveTrackingPage() {
       const params = new URLSearchParams(window.location.search);
       const selectVehicleName = params.get("selected");
       if (selectVehicleName) {
-        const found = gpsData.find(v => v.name === selectVehicleName || v.name.includes(selectVehicleName));
+        const found = gpsData.find(v => v.name === selectVehicleName || String(v.name ?? "").includes(selectVehicleName));
         if (found) {
           setSelectedVehicleId(found.deviceUniqueId);
           urlSelectionApplied.current = true;

@@ -195,6 +195,15 @@ export function connectGpsStream(onData, onError) {
       }
     });
 
+    es.addEventListener("gps-error", (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        onError?.(payload.error || "Live GPS data is currently unavailable.");
+      } catch {
+        onError?.("Live GPS data is currently unavailable.");
+      }
+    });
+
     es.onerror = () => {
       es.close();
       if (!alive) return;

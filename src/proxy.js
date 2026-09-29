@@ -12,6 +12,8 @@ const PROTECTED_ROUTES = [
   { prefix: "/driver", role: "DRIVER" },
 ];
 
+const getCookieName = (role) => `auth_token_${role.toLowerCase()}`;
+
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
 
@@ -25,70 +27,105 @@ export async function proxy(request) {
     return NextResponse.next();
   }
 
-  const token = request.cookies.get("auth_token")?.value;
-
-  // Check if this is a protected route
+  // Check which protected dashboard is being accessed
   const matchedRoute = PROTECTED_ROUTES.find((r) =>
     pathname.startsWith(r.prefix)
   );
 
+  // ---------------------------------------------------------
+  // PROTECTED DASHBOARD ROUTES
+  // ---------------------------------------------------------
   if (matchedRoute) {
-    // No token → redirect to login
+    const cookieName = getCookieName(matchedRoute.role);
+
+    const token =
+      request.cookies.get(cookieName)?.value || null;
+
+    // No token for this specific role
     if (!token) {
       const loginUrl = new URL("/", request.url);
+
+      // Remember which dashboard the user tried to access
       loginUrl.searchParams.set("redirect", pathname);
+
       return NextResponse.redirect(loginUrl);
     }
 
     try {
       const { payload } = await jwtVerify(token, JWT_SECRET);
 
-      // Wrong role → redirect to their correct dashboard
+      // Extra safety:
+      // token role must match the dashboard being accessed
       if (payload.role !== matchedRoute.role) {
         const dashboardMap = {
           ADMIN: "/admin",
           TELECALLER: "/telecaller",
           DRIVER: "/driver",
         };
+
+        const correctDashboard =
+          dashboardMap[payload.role] || "/";
+
         return NextResponse.redirect(
-          new URL(dashboardMap[payload.role] || "/", request.url)
+          new URL(correctDashboard, request.url)
         );
       }
 
-      // Valid — attach user info to headers for server components
+      // Attach authenticated user information to request headers
       const requestHeaders = new Headers(request.headers);
-      requestHeaders.set("x-user-id", String(payload.userId));
-      requestHeaders.set("x-user-name", payload.name);
-      requestHeaders.set("x-user-role", payload.role);
 
-      return NextResponse.next({ request: { headers: requestHeaders } });
+      requestHeaders.set(
+        "x-user-id",
+        String(payload.userId)
+      );
+
+      requestHeaders.set(
+        "x-user-name",
+        String(payload.name || "")
+      );
+
+      requestHeaders.set(
+        "x-user-role",
+        String(payload.role || "")
+      );
+
+      return NextResponse.next({
+        request: {
+          headers: requestHeaders,
+        },
+      });
     } catch {
-      // Invalid/expired token → redirect to login
+      // Invalid / expired token.
+      // Delete ONLY this dashboard's cookie.
       const loginUrl = new URL("/", request.url);
+
+      loginUrl.searchParams.set("redirect", pathname);
+
       const response = NextResponse.redirect(loginUrl);
-      response.cookies.delete("auth_token");
+
+      response.cookies.delete(cookieName);
+
       return response;
     }
   }
 
-  // Login page (/) — if already logged in, redirect to dashboard
+  // ---------------------------------------------------------
+  // LOGIN PAGE
+  // ---------------------------------------------------------
+  //
+  // IMPORTANT:
+  // Do NOT check any auth cookie here.
+  //
+  // The same Chrome profile can have:
+  // auth_token_admin
+  // auth_token_telecaller
+  // auth_token_driver
+  //
+  // The login page must always remain accessible so that
+  // another dashboard can be logged in from another tab.
+  //
   if (pathname === "/") {
-    if (token) {
-      try {
-        const { payload } = await jwtVerify(token, JWT_SECRET);
-        const dashboardMap = {
-          ADMIN: "/admin",
-          TELECALLER: "/telecaller",
-          DRIVER: "/driver",
-        };
-        const dest = dashboardMap[payload.role];
-        if (dest) {
-          return NextResponse.redirect(new URL(dest, request.url));
-        }
-      } catch {
-        // Invalid token — let them see login page
-      }
-    }
+    return NextResponse.next();
   }
 
   return NextResponse.next();

@@ -80,8 +80,7 @@ export default function LoginPage() {
     <div className="min-h-screen w-full flex flex-col lg:flex-row bg-white overflow-hidden">
 
       {/* LEFT COLUMN: Modern Rescue Hero Banner */}
-      <div className="relative lg:w-[50%] xl:w-[55%] min-h-[340px] lg:min-h-screen bg-slate-950 flex flex-col justify-between p-8 sm:p-12 text-white overflow-hidden flex-shrink-0">
-
+      <div className="hidden lg:flex relative lg:w-[50%] xl:w-[55%] min-h-[340px] lg:min-h-screen bg-slate-950 flex-col justify-between p-8 sm:p-12 text-white overflow-hidden flex-shrink-0">
         {/* Rescue Image Background */}
         <div
           className="absolute inset-0 bg-cover bg-center bg-no-repeat scale-105 opacity-75"

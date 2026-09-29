@@ -33,7 +33,7 @@ export async function POST(req) {
     const driverId = `DRV-${String(ambulance_number).padStart(3, "0")}`;
     const result = await query(
       `INSERT INTO drivers (id, name, email, phone, license, ambulance_number, vehicle_name, plate, status, availability, total_rescues)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Available', 0)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Off Duty', 0)
        RETURNING *`,
       [
         driverId,
@@ -59,19 +59,38 @@ export async function POST(req) {
 export async function PUT(req) {
   try {
     const body = await req.json();
-    const { id, name, email, phone, license, vehicle_name, plate, status, availability, total_rescues } = body;
+    const { id, name, email, phone, license, ambulance_number, vehicle_name, plate, status, availability, total_rescues } = body;
 
     if (!id) return NextResponse.json({ success: false, error: "Missing driver id" }, { status: 400 });
+    if (name !== undefined && !String(name).trim()) {
+      return NextResponse.json({ success: false, error: "Driver name is required" }, { status: 400 });
+    }
+    if (phone !== undefined && !String(phone).trim()) {
+      return NextResponse.json({ success: false, error: "Driver phone is required" }, { status: 400 });
+    }
+    if (ambulance_number !== undefined && (!Number.isInteger(Number(ambulance_number)) || Number(ambulance_number) < 1)) {
+      return NextResponse.json({ success: false, error: "Ambulance number must be a positive integer" }, { status: 400 });
+    }
+
+    if (ambulance_number !== undefined) {
+      const existing = await query(
+        "SELECT id FROM drivers WHERE ambulance_number = $1 AND id <> $2",
+        [Number(ambulance_number), id]
+      );
+      if (existing.rows.length > 0) {
+        return NextResponse.json({ success: false, error: "Ambulance number is already assigned to another driver" }, { status: 409 });
+      }
+    }
 
     const updates = [];
     const values = [];
     let paramIdx = 1;
 
-    const fields = { name, email, phone, license, vehicle_name, plate, status, availability, total_rescues };
+    const fields = { name, email, phone, license, ambulance_number, vehicle_name, plate, status, availability, total_rescues };
     for (const [key, val] of Object.entries(fields)) {
       if (val !== undefined) {
         updates.push(`${key} = $${paramIdx++}`);
-        values.push(val);
+        values.push(key === "ambulance_number" || key === "total_rescues" ? Number(val) : val);
       }
     }
 
@@ -79,7 +98,7 @@ export async function PUT(req) {
 
     values.push(id);
     const result = await query(
-      `UPDATE drivers SET ${updates.join(", ")}, updated_at = NOW() WHERE (id = $${paramIdx} OR name = $${paramIdx}) RETURNING *`,
+      `UPDATE drivers SET ${updates.join(", ")}, updated_at = NOW() WHERE id = $${paramIdx} RETURNING *`,
       values
     );
 
@@ -87,6 +106,9 @@ export async function PUT(req) {
     return NextResponse.json({ success: true, data: rowToDriver(result.rows[0]) });
   } catch (err) {
     console.error("[Drivers PUT Error]", err.message);
+    if (err.code === "23505") {
+      return NextResponse.json({ success: false, error: "Ambulance number is already assigned to another driver" }, { status: 409 });
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -97,7 +119,8 @@ export async function DELETE(req) {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ success: false, error: "Missing id" }, { status: 400 });
-    await query("DELETE FROM drivers WHERE id = $1", [id]);
+    const result = await query("DELETE FROM drivers WHERE id = $1", [id]);
+    if (result.rowCount === 0) return NextResponse.json({ success: false, error: "Driver not found" }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[Drivers DELETE Error]", err.message);

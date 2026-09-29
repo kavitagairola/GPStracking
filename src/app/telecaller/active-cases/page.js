@@ -122,21 +122,7 @@ export default function ActiveCasesPage() {
     }
   };
 
-  const handleUpdateStatus = async (id, newStatus) => {
-    try {
-      const res = await fetch("/api/cases", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status: newStatus })
-      });
-      const json = await res.json();
-      if (json.success) {
-        setCases(prev => prev.map(c => c.id === id ? { ...c, status: newStatus } : c));
-      }
-    } catch (err) {
-      console.error("Failed to update case status:", err);
-    }
-  };
+ 
 
   const handleDeleteCase = async (id) => {
     if (!window.confirm("Are you sure you want to cancel/delete this rescue case?")) return;
@@ -299,21 +285,21 @@ export default function ActiveCasesPage() {
                       </td>
 
                       {/* Live Dropdown stage adjustment */}
-                      <td className="py-4 px-3">
-                        <div className="flex flex-col gap-1.5">
-                          <select
-                            value={c.status}
-                            onChange={(e) => handleUpdateStatus(c.id, e.target.value)}
-                            className={`h-8 px-2.5 rounded-lg text-[10.5px] font-black uppercase outline-none cursor-pointer ${getStatusColor(c.status)}`}
-                          >
-                            <option value="Assigned">Assigned</option>
-                            <option value="En Route">En Route</option>
-                            <option value="Reached Location">Reached Spot</option>
-                            <option value="Animal Picked">Animal Picked</option>
-                            <option value="Hospital Reached">Hospital Reached</option>
-                          </select>
-                        </div>
-                      </td>
+                     {/* Live Rescue Stage / Status - Read Only */}
+<td className="py-4 px-3">
+  <div className="flex flex-col gap-1.5">
+    <span
+      className={`h-8 px-2.5 rounded-lg text-[10.5px] font-black uppercase inline-flex items-center justify-center ${getStatusColor(c.status)}`}
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-current mr-1.5" />
+      {c.status || "Unknown"}
+    </span>
+
+    <span className="text-[9px] text-slate-400 font-semibold">
+      Live driver status
+    </span>
+  </div>
+</td>
 
                       {/* Actions */}
                       <td className="py-4 px-3 text-center" onClick={(e) => e.stopPropagation()}>

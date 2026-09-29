@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   Calendar,
   ChevronDown,
@@ -229,10 +230,10 @@ export default function AdminDashboard() {
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
               <h3 className="text-[14px] font-black text-slate-800">Live Ambulance Fleet Telemetry</h3>
             </div>
-            <a href="/admin/live-tracking" className="text-[11px] font-black text-blue-600 hover:underline flex items-center gap-1">
+            <Link href="/admin/live-tracking" className="text-[11px] font-black text-blue-600 hover:underline flex items-center gap-1">
               <span>Full Fleet Map</span>
               <ExternalLink className="w-3.5 h-3.5" />
-            </a>
+            </Link>
           </div>
 
           <div className="overflow-x-auto w-full">
@@ -356,9 +357,9 @@ export default function AdminDashboard() {
             <div>
               <div className="flex items-center justify-between mb-3 border-b border-slate-50 pb-2">
                 <h3 className="text-[13px] font-black text-slate-800">Top Drivers</h3>
-                <a href="/admin/drivers" className="text-[10px] font-black text-blue-600 hover:underline">
+                <Link href="/admin/drivers" className="text-[10px] font-black text-blue-600 hover:underline">
                   View All
-                </a>
+                </Link>
               </div>
 
               <div className="flex flex-col gap-2">
@@ -398,9 +399,9 @@ export default function AdminDashboard() {
               <h3 className="text-[14px] font-black text-slate-800">Latest Rescue Requests</h3>
               <p className="text-[10px] text-gray-400 mt-0.5 font-bold">Real-time rescue calls dispatch list logged by telecallers & updated by drivers.</p>
             </div>
-            <a href="/admin/cases" className="text-[12px] font-black text-blue-600 hover:underline">
+            <Link href="/admin/cases" className="text-[12px] font-black text-blue-600 hover:underline">
               View All Cases
-            </a>
+            </Link>
           </div>
 
           <div className="overflow-x-auto w-full">

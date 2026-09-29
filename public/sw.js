@@ -1,4 +1,4 @@
-const CACHE_NAME = "resqtrack-v1";
+const CACHE_NAME = "resqtrack-v2";
 const ASSETS_TO_CACHE = [
   "/driver",
   "/manifest.json",
@@ -32,24 +32,45 @@ self.addEventListener("activate", (event) => {
 
 // Fetch Event
 self.addEventListener("fetch", (event) => {
-  // Only handle GET requests
-  if (event.request.method !== "GET") return;
+  const request = event.request;
+  const url = new URL(request.url);
+  const isDriverOfflineNavigation = request.mode === "navigate" && url.pathname === "/driver";
+
+  if (request.method !== "GET" || url.origin !== self.location.origin) return;
+
+  // Let Next.js handle page, API, and RSC requests without stale cache fallbacks.
+  if (
+    (request.mode === "navigate" && !isDriverOfflineNavigation) ||
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/_next/") ||
+    request.headers.has("RSC") ||
+    request.headers.has("Next-Router-State-Tree") ||
+    request.headers.has("Next-Router-Prefetch") ||
+    url.searchParams.has("_rsc")
+  ) return;
+
+  if (isDriverOfflineNavigation) {
+    event.respondWith(
+      fetch(request).catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  if (!/\.(?:png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf)$|\/manifest\.json$/i.test(url.pathname)) return;
 
   event.respondWith(
-    fetch(event.request)
+    fetch(request)
       .then((networkResponse) => {
-        // Cache successful network responses for static resources
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === "basic") {
+        if (networkResponse?.status === 200 && networkResponse.type === "basic") {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
+            cache.put(request, responseToCache);
           });
         }
         return networkResponse;
       })
       .catch(() => {
-        // Fallback to cache if network fails
-        return caches.match(event.request);
+        return caches.match(request);
       })
   );
 });

@@ -3,7 +3,7 @@
  * Run: node scripts/init-db.js
  *
  * - Creates 'resqtrack' database if not exists
- * - Creates all tables: users, cases, gps_history, drivers, ambulances
+ * - Creates all tables: users, cases, gps_history, drivers, ambulances, gps_driver_assignments
  * - Seeds default users (admin, telecaller, drivers)
  * - Seeds drivers registry (16 drivers)
  * - Seeds ambulances registry (40 ambulances)
@@ -151,7 +151,7 @@ async function createTables(pool) {
       vehicle_name VARCHAR(100),
       plate VARCHAR(50),
       status VARCHAR(50) DEFAULT 'Active',
-      availability VARCHAR(50) DEFAULT 'Available',
+      availability VARCHAR(50) DEFAULT 'Off Duty',
       total_rescues INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -177,6 +177,17 @@ async function createTables(pool) {
     )
   `);
   console.log("  ✅ Table: ambulances");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS gps_driver_assignments (
+      device_id VARCHAR(255) PRIMARY KEY,
+      device_name VARCHAR(255) NOT NULL,
+      driver_id VARCHAR(20) NOT NULL UNIQUE REFERENCES drivers(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  console.log("  ✅ Table: gps_driver_assignments");
 }
 
 // Seed auth users
@@ -222,7 +233,7 @@ async function seedDrivers(pool) {
 
     await pool.query(
       `INSERT INTO drivers (id, name, email, phone, license, ambulance_number, vehicle_name, plate, status, availability, total_rescues)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Active', 'Available', $9)`,
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Active', 'Off Duty', $9)`,
       [
         driverId,
         drv.name,

@@ -1,56 +1,174 @@
 import { NextResponse } from "next/server";
 import { getRouteHistory } from "@/lib/gpsHistoryStore";
+import { fetchMillitrackHistory } from "@/lib/millitrack";
 
 export const dynamic = "force-dynamic";
 
+function getDateRange(dateStr) {
+  const start = new Date(`${dateStr}T00:00:00.000Z`);
+  const end = new Date(`${dateStr}T23:59:59.999Z`);
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString(),
+  };
+}
+
+function normalizeHistoryPoint(position) {
+  if (
+    typeof position?.latitude !== "number" ||
+    typeof position?.longitude !== "number"
+  ) {
+    return null;
+  }
+
+  const attributes = position.attributes || {};
+
+  return {
+    latitude: position.latitude,
+    longitude: position.longitude,
+    speed: Number(position.speed || 0) * 1.852,
+    course: Number(position.course || 0),
+    ignition: attributes.ignition === true,
+    battery:
+      attributes.batteryLevel ??
+      attributes.battery ??
+      null,
+    timestamp:
+      position.fixTime ||
+      position.deviceTime ||
+      position.serverTime ||
+      null,
+    address: position.address || "",
+  };
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const deviceUniqueId = searchParams.get("deviceUniqueId");
-  const dateStr = searchParams.get("date") || new Date().toISOString().split("T")[0];
+
+  const deviceUniqueId =
+    searchParams.get("deviceUniqueId");
+
+  const dateStr =
+    searchParams.get("date") ||
+    new Date().toISOString().split("T")[0];
 
   if (!deviceUniqueId) {
-    return NextResponse.json({ success: false, error: "deviceUniqueId is required" }, { status: 400 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: "deviceUniqueId is required",
+      },
+      { status: 400 }
+    );
   }
-
-  // Fetch current device state from Millitrack using same auth as main GPS routes
-  const email    = process.env.MILLITRACK_EMAIL    || "gokulk01";
-  const password = process.env.MILLITRACK_PASSWORD || "123456";
-  const authHeader = "Basic " + Buffer.from(`${email}:${password}`).toString("base64");
-  let currentDeviceState = null;
 
   try {
-    const res = await fetch("http://track2.millitrack.com/api/positions", {
-      headers: { Authorization: authHeader, Accept: "application/json" },
-      cache: "no-store",
-    });
-    if (res.ok) {
-      const positions = await res.json();
-      if (Array.isArray(positions)) {
-        // Match by uniqueId — positions use deviceId, so we also fetch devices
-        const devRes = await fetch("http://track2.millitrack.com/api/devices", {
-          headers: { Authorization: authHeader, Accept: "application/json" },
-          cache: "no-store",
-        });
-        if (devRes.ok) {
-          const devices = await devRes.json();
-          const dev = Array.isArray(devices) ? devices.find(d => d.uniqueId === deviceUniqueId) : null;
-          if (dev) {
-            const pos = positions.find(p => p.deviceId === dev.id);
-            if (pos) currentDeviceState = { ...dev, ...pos, deviceUniqueId: dev.uniqueId };
-          }
-        }
-      }
+    /*
+     * 1. Resolve selected device from current Millitrack data.
+     *    deviceUniqueId is our app identifier, while the
+     *    historical API requires the Millitrack/Traccar device id.
+     */
+    const { objects } = await import("@/lib/millitrack").then(
+      ({ fetchMillitrackGps }) => fetchMillitrackGps()
+    );
+
+    const selectedDevice = objects.find(
+      (device) =>
+        device.deviceUniqueId === deviceUniqueId
+    );
+
+    if (!selectedDevice?.id) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Selected GPS device was not found.",
+        },
+        { status: 404 }
+      );
     }
-  } catch (err) {
-    console.warn("Failed to fetch live target state for history backfill:", err.message);
+
+    /*
+     * 2. Build exact selected-date range.
+     */
+    const { from, to } = getDateRange(dateStr);
+
+    /*
+     * 3. Fetch REAL historical positions.
+     */
+    const historicalPositions =
+      await fetchMillitrackHistory(
+        selectedDevice.id,
+        from,
+        to
+      );
+
+    /*
+     * 4. Normalize positions for the existing
+     *    GPS History UI.
+     */
+    const realPoints = historicalPositions
+      .map(normalizeHistoryPoint)
+      .filter(Boolean)
+      .sort(
+        (a, b) =>
+          new Date(a.timestamp || 0) -
+          new Date(b.timestamp || 0)
+      );
+
+    /*
+     * 5. If Millitrack has real history, return it.
+     */
+    if (realPoints.length > 0) {
+      return NextResponse.json({
+        success: true,
+        source: "millitrack-history",
+        data: realPoints,
+      });
+    }
+
+    /*
+     * 6. If remote history is empty, use the locally
+     *    recorded real GPS points as fallback.
+     */
+    const storedPoints = await getRouteHistory(
+      deviceUniqueId,
+      dateStr
+    );
+
+    if (storedPoints.length > 0) {
+      return NextResponse.json({
+        success: true,
+        source: "database-history",
+        data: storedPoints,
+      });
+    }
+
+    /*
+     * 7. No real history exists.
+     *    NEVER generate fake coordinates.
+     */
+    return NextResponse.json({
+      success: true,
+      source: "empty",
+      data: [],
+      message:
+        "No GPS history is available for the selected vehicle and date.",
+    });
+  } catch (error) {
+    console.error(
+      "GPS History API failed:",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error?.message ||
+          "Unable to fetch GPS history.",
+      },
+      { status: 502 }
+    );
   }
-
-  // Get historical route coordinates resolving directly to the actual current coordinates
-  const points = await getRouteHistory(deviceUniqueId, dateStr, currentDeviceState);
-
-  // Return the history points
-  return NextResponse.json({
-    success: true,
-    data: points
-  });
 }

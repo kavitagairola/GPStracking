@@ -189,11 +189,11 @@ export default function CasesPage() {
   };
 
   const filteredCases = cases.filter(c => {
-    const matchesSearch = c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          c.caller.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          c.animal.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          c.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          c.driver.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = String(c.id ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                String(c.caller ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                String(c.animal ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                String(c.location ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                String(c.driver ?? "").toLowerCase().includes(searchQuery.toLowerCase());
     
     const matchesStatus = statusFilter === "ALL" || c.status === statusFilter;
     const matchesPriority = priorityFilter === "ALL" || c.priority === priorityFilter;

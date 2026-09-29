@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { 
   Search, Phone, CreditCard, ShieldCheck, Users, Compass, 
   AlertCircle, CheckCircle, RefreshCw, Plus, 
-  ChevronLeft, ChevronRight, Eye, Edit3, MoreVertical, Truck, X, Save
+  ChevronLeft, ChevronRight, Eye, Edit3, Trash2, Truck, X, Save
 } from "lucide-react";
 import { enrichGpsVehicle } from "@/lib/gpsUtils";
 
@@ -13,6 +13,7 @@ export default function DriversPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [gpsMap, setGpsMap] = useState({});
+  const [caseMap, setCaseMap] = useState({});
 
   // Filter states
   const [searchQuery, setSearchQuery] = useState("");
@@ -34,6 +35,57 @@ export default function DriversPage() {
   // Edit modal
   const [editDriver, setEditDriver] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [editError, setEditError] = useState("");
+  const [actionError, setActionError] = useState("");
+
+  // Fetch live rescue status from cases
+const fetchCaseStatuses = async () => {
+  try {
+    const res = await fetch("/api/cases?t=" + Date.now());
+    const json = await res.json();
+
+    if (json.success && Array.isArray(json.data)) {
+      const map = {};
+
+      json.data.forEach((item) => {
+        if (!item?.driver) return;
+
+        const driverName = String(item.driver).trim();
+
+        // Keep the latest case for each driver
+        const existing = map[driverName];
+
+        if (!existing) {
+          map[driverName] = item;
+          return;
+        }
+
+        const existingTime = new Date(
+          existing.updatedAt ||
+          existing.completedAt ||
+          existing.createdAt ||
+          0
+        ).getTime();
+
+        const currentTime = new Date(
+          item.updatedAt ||
+          item.completedAt ||
+          item.createdAt ||
+          0
+        ).getTime();
+
+        if (currentTime >= existingTime) {
+          map[driverName] = item;
+        }
+      });
+
+      setCaseMap(map);
+    }
+  } catch (err) {
+    console.error("Failed to fetch live rescue statuses:", err);
+  }
+};
 
   // Fetch drivers from DB
   const fetchDrivers = async () => {
@@ -70,24 +122,47 @@ export default function DriversPage() {
     } catch {}
   };
 
-  useEffect(() => {
-    fetchDrivers();
-    fetchGps();
-    const gpsInterval = setInterval(fetchGps, 8000);
-    return () => clearInterval(gpsInterval);
-  }, []);
+useEffect(() => {
+  fetchDrivers();
+  fetchGps();
+  fetchCaseStatuses();
+
+  // Keep driver database refreshed
+  const driversInterval = setInterval(fetchDrivers, 5000);
+
+  // Live rescue status refresh
+  const casesInterval = setInterval(fetchCaseStatuses, 4000);
+
+  // Keep existing GPS refresh unchanged
+  const gpsInterval = setInterval(fetchGps, 8000);
+
+  return () => {
+    clearInterval(driversInterval);
+    clearInterval(casesInterval);
+    clearInterval(gpsInterval);
+  };
+}, []);
 
   // Merge DB drivers with live GPS overlay
-  const enrichedDrivers = drivers.map(driver => {
-    const gps = gpsMap[driver.name];
-    return {
-      ...driver,
-      availability: gps ? (gps.isIgnitionOn ? "On Duty" : "Available") : driver.availability,
-      speed: gps?.speedDisplay || null,
-      todayDistance: gps?.todayDistDisplay || null,
-      gpsPlate: gps?.plate || driver.plate,
-    };
-  });
+const enrichedDrivers = drivers.map((driver) => {
+  const gps = gpsMap[driver.name];
+  const rescueCase = caseMap[driver.name];
+
+  return {
+    ...driver,
+
+    // Existing driver database status remains untouched
+    status: driver.status,
+
+    // Live rescue workflow status
+    rescueStatus: rescueCase?.status || null,
+
+    // Existing GPS data
+    speed: gps?.speedDisplay || null,
+    todayDistance: gps?.todayDistDisplay || null,
+    gpsPlate: gps?.plate || driver.plate,
+  };
+});
 
   const handleResetFilters = () => {
     setSearchQuery(""); setStatusFilter("All Status");
@@ -97,7 +172,7 @@ export default function DriversPage() {
   // Filter logic
   const filteredDrivers = enrichedDrivers.filter(d => {
     const q = searchQuery.toLowerCase();
-    const matchesSearch = d.name.toLowerCase().includes(q) || d.phone.includes(q) ||
+    const matchesSearch = String(d.name ?? "").toLowerCase().includes(q) || String(d.phone ?? "").includes(q) ||
       (d.license || "").toLowerCase().includes(q) || (d.email || "").toLowerCase().includes(q);
     const matchesStatus = statusFilter === "All Status" ? true : d.status === statusFilter;
     const matchesAvailability = availabilityFilter === "All" ? true : d.availability === availabilityFilter;
@@ -136,13 +211,79 @@ export default function DriversPage() {
   // Update driver status
   const handleUpdateStatus = async (driver, newStatus) => {
     try {
-      await fetch("/api/drivers", {
+      const response = await fetch("/api/drivers", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: driver.id, status: newStatus }),
       });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        setActionError(json.error || "Failed to update driver status.");
+        return;
+      }
+      setActionError("");
       fetchDrivers();
-    } catch {}
+    } catch {
+      setActionError("Network error while updating driver status.");
+    }
+  };
+
+  const openEditDriver = (driver) => {
+    setEditDriver(driver);
+    setEditForm({
+      name: driver.name || "",
+      phone: driver.phone || "",
+      email: driver.email || "",
+      license: driver.license || "",
+      ambulance_number: driver.ambulance_number || "",
+      vehicle_name: driver.vehicle_name || "",
+      plate: driver.plate || "",
+      status: driver.status || "Active",
+      total_rescues: driver.total_rescues ?? 0,
+    });
+    setEditError("");
+    setActionError("");
+  };
+
+  const handleSaveDriver = async (e) => {
+    e.preventDefault();
+    if (!editDriver) return;
+    setEditLoading(true);
+    setEditError("");
+    try {
+      const response = await fetch("/api/drivers", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editDriver.id, ...editForm }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        setEditError(json.error || "Failed to update driver.");
+        return;
+      }
+      setEditDriver(null);
+      await fetchDrivers();
+    } catch {
+      setEditError("Network error while updating driver.");
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const handleDeleteDriver = async (driver) => {
+    if (!window.confirm(`Delete driver ${driver.name} permanently?`)) return;
+    setActionError("");
+    try {
+      const response = await fetch(`/api/drivers?id=${encodeURIComponent(driver.id)}`, { method: "DELETE" });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        setActionError(json.error || "Failed to delete driver.");
+        return;
+      }
+      await fetchDrivers();
+    } catch {
+      setActionError("Network error while deleting driver.");
+    }
   };
 
   return (
@@ -256,6 +397,7 @@ export default function DriversPage() {
       </div>
 
       {/* Registry Table */}
+      {actionError && <p className="text-rose-600 text-[12px] font-bold bg-rose-50 border border-rose-100 px-4 py-3 rounded-xl">{actionError}</p>}
       {loading ? (
         <div className="py-16 text-center text-gray-400 font-bold">Loading drivers from database...</div>
       ) : error ? (
@@ -327,33 +469,76 @@ export default function DriversPage() {
                               ? "bg-emerald-50 text-emerald-600 border-emerald-100"
                               : "bg-slate-50 text-slate-500 border-slate-200"
                           }`}>
-                            {driver.status}
+                           <span
+  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-black uppercase border ${
+    driver.rescueStatus === "Assigned"
+      ? "bg-amber-50 text-amber-600 border-amber-200"
+      : driver.rescueStatus === "En Route"
+        ? "bg-blue-50 text-blue-600 border-blue-200"
+        : driver.rescueStatus === "Reached Location"
+          ? "bg-orange-50 text-orange-600 border-orange-200"
+          : driver.rescueStatus === "Animal Picked"
+            ? "bg-violet-50 text-violet-600 border-violet-200"
+            : driver.rescueStatus === "Hospital Reached"
+              ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+              : driver.rescueStatus === "Completed"
+                ? "bg-green-50 text-green-600 border-green-200"
+                : "bg-slate-50 text-slate-500 border-slate-200"
+  }`}
+>
+  <span
+    className={`w-1.5 h-1.5 rounded-full ${
+      driver.rescueStatus === "Assigned"
+        ? "bg-amber-500"
+        : driver.rescueStatus === "En Route"
+          ? "bg-blue-500"
+          : driver.rescueStatus === "Reached Location"
+            ? "bg-orange-500"
+            : driver.rescueStatus === "Animal Picked"
+              ? "bg-violet-500"
+              : driver.rescueStatus === "Hospital Reached"
+                ? "bg-emerald-500"
+                : driver.rescueStatus === "Completed"
+                  ? "bg-green-500"
+                  : "bg-slate-400"
+    }`}
+  />
+
+  {driver.rescueStatus || "—"}
+</span> 
                           </span>
                         </td>
                         <td className="py-3 px-5">
-                          <button
-                            onClick={async () => {
-                              const newAvail = driver.availability === "On Duty" ? "Off Duty" : "On Duty";
-                              try {
-                                await fetch("/api/drivers", {
-                                  method: "PUT",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ id: driver.id, availability: newAvail }),
-                                });
-                                fetchDrivers();
-                              } catch (e) {
-                                console.error("Failed to toggle duty in admin table:", e);
-                              }
-                            }}
-                            className={`inline-block px-2.5 py-1 rounded-full text-[9px] font-black uppercase border cursor-pointer transition hover:scale-105 ${
-                              driver.availability === "Off Duty" || driver.availability === "On Leave"
-                                ? "bg-rose-50 text-rose-600 border-rose-200"
-                                : "bg-emerald-50 text-emerald-600 border-emerald-200"
-                            }`}
-                            title="Click to toggle On Duty / Off Duty"
-                          >
-                            {driver.availability === "Off Duty" || driver.availability === "On Leave" ? "Off Duty" : "On Duty"}
-                          </button>
+                         <span
+  className={`inline-block px-2.5 py-1 rounded-full text-[9px] font-black uppercase border ${
+    driver.availability === "On Duty"
+      ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+      : "bg-rose-50 text-rose-600 border-rose-200"
+  }`}
+>
+  <span
+  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-black uppercase border ${
+    driver.availability === "On Duty"
+      ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+      : driver.availability === "On Leave"
+        ? "bg-amber-50 text-amber-600 border-amber-200"
+        : "bg-rose-50 text-rose-600 border-rose-200"
+  }`}
+>
+  <span
+    className={`w-1.5 h-1.5 rounded-full ${
+      driver.availability === "On Duty"
+        ? "bg-emerald-500"
+        : driver.availability === "On Leave"
+          ? "bg-amber-500"
+          : "bg-rose-500"
+    }`}
+  />
+
+  {driver.availability || "Off Duty"}
+</span>
+
+</span>
                         </td>
                         <td className="py-3 px-5 font-black text-slate-800">
                           {driver.total_rescues}
@@ -368,11 +553,25 @@ export default function DriversPage() {
                               <Eye className="w-3.5 h-3.5" />
                             </a>
                             <button
+                              onClick={() => openEditDriver(driver)}
+                              title="Edit Driver"
+                              className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-850 shadow-3xs transition cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
                               onClick={() => handleUpdateStatus(driver, driver.status === "Active" ? "Inactive" : "Active")}
                               title="Toggle Status"
                               className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-850 shadow-3xs transition cursor-pointer"
                             >
-                              <Edit3 className="w-3.5 h-3.5" />
+                              <CheckCircle className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteDriver(driver)}
+                              title="Delete Driver"
+                              className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-rose-50 hover:text-rose-600 shadow-3xs transition cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </td>
@@ -465,6 +664,57 @@ export default function DriversPage() {
                 className="h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[12.5px] font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50">
                 <Save className="w-4 h-4" />
                 {addLoading ? "Saving..." : "Save Driver"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editDriver && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 flex flex-col gap-5 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[16px] font-black text-slate-800">Edit Driver</h2>
+              <button onClick={() => setEditDriver(null)} className="text-slate-400 hover:text-slate-700 cursor-pointer" aria-label="Close edit driver form">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {editError && <p className="text-rose-500 text-[12px] font-bold bg-rose-50 px-3 py-2 rounded-xl">{editError}</p>}
+            <form onSubmit={handleSaveDriver} className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Full Name *
+                  <input required value={editForm.name ?? ""} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Phone *
+                  <input required value={editForm.phone ?? ""} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ambulance No. *
+                  <input required type="number" min="1" max="40" value={editForm.ambulance_number ?? ""} onChange={e => setEditForm(f => ({ ...f, ambulance_number: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">License No.
+                  <input value={editForm.license ?? ""} onChange={e => setEditForm(f => ({ ...f, license: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="col-span-2 flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Email
+                  <input type="email" value={editForm.email ?? ""} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Vehicle Name
+                  <input value={editForm.vehicle_name ?? ""} onChange={e => setEditForm(f => ({ ...f, vehicle_name: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Plate No.
+                  <input value={editForm.plate ?? ""} onChange={e => setEditForm(f => ({ ...f, plate: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status
+                  <select value={editForm.status ?? "Active"} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12px] font-bold normal-case focus:outline-none focus:border-blue-500">
+                    <option value="Active">Active</option><option value="Inactive">Inactive</option>
+                  </select>
+                </label>
+               
+                <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Rescues
+                  <input type="number" min="0" value={editForm.total_rescues ?? 0} onChange={e => setEditForm(f => ({ ...f, total_rescues: e.target.value }))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[12.5px] font-normal normal-case focus:outline-none focus:border-blue-500" />
+                </label>
+              </div>
+              <button type="submit" disabled={editLoading} className="h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[12.5px] font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50">
+                <Save className="w-4 h-4" />{editLoading ? "Saving..." : "Save Changes"}
               </button>
             </form>
           </div>

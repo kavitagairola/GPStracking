@@ -44,6 +44,7 @@ export function getDriverForVehicleIndex(idx) {
  */
 export function parseAmbulanceNumber(gpsName) {
   if (!gpsName) return null;
+  gpsName = String(gpsName);
   // Try to find (A-N) or (A - N) pattern first
   const aMatch = gpsName.match(/\([A-Z]\s*-\s*(\d+)\)/i);
   if (aMatch) return parseInt(aMatch[1], 10);
@@ -63,6 +64,7 @@ export function parseAmbulanceNumber(gpsName) {
  */
 export function parsePlateNumber(gpsName) {
   if (!gpsName) return "Unknown";
+  gpsName = String(gpsName);
   if (gpsName.includes("(")) {
     return gpsName.split("(")[0].trim();
   }
@@ -74,6 +76,7 @@ export function parsePlateNumber(gpsName) {
  */
 export function parseAlias(gpsName) {
   if (!gpsName) return "";
+  gpsName = String(gpsName);
   const match = gpsName.match(/\([A-Z]\s*-\s*\d+\)/i);
   return match ? match[0] : "";
 }
@@ -140,8 +143,9 @@ export function computeVehicleStatus(attributes, speed) {
  */
 export function formatAddress(gpsItem) {
   // The API provides an `address` field for some devices
-  if (gpsItem.address && gpsItem.address.trim() && gpsItem.address !== "null") {
-    return gpsItem.address;
+  const address = String(gpsItem.address ?? "");
+  if (address.trim() && address !== "null") {
+    return address;
   }
   if (!gpsItem.latitude || !gpsItem.longitude) return "Location unavailable";
   return `${gpsItem.latitude.toFixed(5)}, ${gpsItem.longitude.toFixed(5)}`;
@@ -166,7 +170,7 @@ export function timeAgo(serverTime) {
  * Build a fully enriched vehicle object from a raw GPS API item.
  * This is the single transformation used across ALL pages.
  */
-export function enrichGpsVehicle(gpsItem) {
+export function enrichGpsVehicle(gpsItem, assignedDriver = null) {
   if (!gpsItem) return null;
 
   const num = parseAmbulanceNumber(gpsItem.name);
@@ -174,9 +178,12 @@ export function enrichGpsVehicle(gpsItem) {
   const displayNum = num || (gpsItem.id ? (gpsItem.id % 100) : null);
   const plate = parsePlateNumber(gpsItem.name);
   const alias = parseAlias(gpsItem.name);
-  // Assign driver by parsed number; if no number, use device id-based assignment
-  const driverIdx = num || (gpsItem.id ? (gpsItem.id % DRIVERS_LIST.length) + 1 : null);
-  const driver = driverIdx ? getDriverForVehicleIndex(driverIdx) : { name: "Unassigned", phone: "-" };
+  const driver = assignedDriver
+    ? {
+        name: assignedDriver.driver_name || assignedDriver.name || "Unassigned",
+        phone: assignedDriver.driver_phone || assignedDriver.phone || "—",
+      }
+    : { name: "Unassigned", phone: "—" };
   const isIgnitionOn = gpsItem.attributes?.ignition === true;
 
   // Extract raw speed (top-level or from attributes)
