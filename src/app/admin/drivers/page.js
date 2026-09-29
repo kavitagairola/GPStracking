@@ -452,17 +452,22 @@ const enrichedDrivers = drivers.map((driver) => {
                           {driver.license || "—"}
                         </td>
                         <td className="py-3 px-5">
-                          <div className="flex items-start gap-2">
-                            <Truck className="w-4 h-4 text-slate-400 mt-0.5" />
-                            <div className="flex flex-col">
-                              <span className="font-extrabold text-slate-700 leading-tight">{driver.vehicle_name}</span>
-                              <span className="text-[9.5px] text-gray-400 mt-1 font-bold">• {driver.plate}</span>
-                              {driver.speed && (
-                                <span className="text-[9px] text-emerald-600 font-bold mt-0.5">● {driver.speed}</span>
-                              )}
-                            </div>
-                          </div>
-                        </td>
+  <div className="flex items-start gap-2">
+    <Truck className="w-4 h-4 text-slate-400 mt-0.5" />
+
+    <div className="flex flex-col">
+      <span className="font-extrabold text-slate-700 leading-tight">
+        {driver.gpsPlate || driver.plate || "—"}
+      </span>
+
+      {driver.speed && (
+        <span className="text-[9px] text-emerald-600 font-bold mt-0.5">
+          ● {driver.speed}
+        </span>
+      )}
+    </div>
+  </div>
+</td>
                         <td className="py-3 px-5">
                           <span className={`inline-block px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase border ${
                             driver.status === "Active"
@@ -543,38 +548,30 @@ const enrichedDrivers = drivers.map((driver) => {
                         <td className="py-3 px-5 font-black text-slate-800">
                           {driver.total_rescues}
                         </td>
-                        <td className="py-3 px-5 text-right">
-                          <div className="inline-flex items-center justify-end gap-1.5">
-                            <a
-                              href={`/admin/live-tracking?selected=${encodeURIComponent(driver.gpsPlate || driver.plate)}`}
-                              title="View Live Track"
-                              className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-850 shadow-3xs transition cursor-pointer"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                            </a>
-                            <button
-                              onClick={() => openEditDriver(driver)}
-                              title="Edit Driver"
-                              className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-850 shadow-3xs transition cursor-pointer"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleUpdateStatus(driver, driver.status === "Active" ? "Inactive" : "Active")}
-                              title="Toggle Status"
-                              className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-850 shadow-3xs transition cursor-pointer"
-                            >
-                              <CheckCircle className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteDriver(driver)}
-                              title="Delete Driver"
-                              className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-rose-50 hover:text-rose-600 shadow-3xs transition cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
+                         <td className="py-3 px-5 text-right">
+  <div className="inline-flex items-center justify-end gap-1.5">
+
+    {/* View */}
+    <a
+      href={`/admin/live-tracking?selected=${encodeURIComponent(driver.gpsPlate || driver.plate)}`}
+      title="View Live Track"
+      className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-50 hover:text-slate-850 shadow-3xs transition cursor-pointer"
+    >
+      <Eye className="w-3.5 h-3.5" />
+    </a>
+
+    {/* Delete */}
+    <button
+      onClick={() => handleDeleteDriver(driver)}
+      title="Delete Driver"
+      className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 hover:bg-rose-50 hover:text-rose-600 shadow-3xs transition cursor-pointer"
+    >
+      <Trash2 className="w-3.5 h-3.5" />
+    </button>
+
+  </div>
+</td>
+                        
                       </tr>
                     );
                   })
